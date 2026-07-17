@@ -1,10 +1,10 @@
-import type { RoutePoint } from './OctilinearRouter'
+import type { Point } from '@/engine/geometry/Point'
 
 export class PolylineOffset {
   public static calculate(
-    points: readonly RoutePoint[],
+    points: readonly Point[],
     offsets: number | readonly number[]
-  ): readonly RoutePoint[] {
+  ): readonly Point[] {
     if (points.length < 2) {
       return [...points]
     }
@@ -43,7 +43,7 @@ export class PolylineOffset {
       return [...points]
     }
 
-    const result: RoutePoint[] = [firstLine.start]
+    const result: Point[] = [firstLine.start]
 
     for (let pointIndex = 1; pointIndex < points.length - 1; pointIndex++) {
       const incoming = offsetLines[pointIndex - 1]
@@ -62,9 +62,9 @@ export class PolylineOffset {
   }
 
   private static intersectLines(
-    first: { start: RoutePoint; end: RoutePoint },
-    second: { start: RoutePoint; end: RoutePoint }
-  ): RoutePoint {
+    first: { start: Point; end: Point },
+    second: { start: Point; end: Point }
+  ): Point {
     const firstDirection = {
       x: first.end.x - first.start.x,
       y: first.end.y - first.start.y,
@@ -97,7 +97,7 @@ export class PolylineOffset {
     }
   }
 
-  private static getNormal(start: RoutePoint, end: RoutePoint): RoutePoint {
+  private static getNormal(start: Point, end: Point): Point {
     const deltaX = end.x - start.x
     const deltaY = end.y - start.y
     const length = Math.hypot(deltaX, deltaY)

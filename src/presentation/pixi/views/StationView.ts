@@ -1,48 +1,41 @@
 import { Container, Graphics } from 'pixi.js'
 import { StationType } from '@/constants/StationType'
+import type { StationId } from '@/game/domain/Ids'
+import type { Station } from '@/game/domain/Station'
 
-export class Station extends Container {
+export class StationView extends Container {
   private static readonly SIZE = 16
   private static readonly TRIANGLE_SCALE = 4 / 3
   private static readonly FILL_COLOR = 0xeeeeee
   private static readonly BORDER_COLOR = 0x222222
   private static readonly BORDER_WIDTH = 5
 
-  private static nextId = 1
-
-  public readonly id = Station.nextId++
-
   private readonly shape = new Graphics()
 
   public constructor(
-    x: number,
-    y: number,
-    public readonly stationType: StationType
+    public readonly stationId: StationId,
+    station: Station
   ) {
     super()
 
-    this.position.set(x, y)
-
+    this.position.set(station.x, station.y)
     this.eventMode = 'static'
     this.cursor = 'pointer'
-
     this.addChild(this.shape)
-    this.draw()
+    this.draw(station.stationType)
   }
 
-  private draw(): void {
-    const size = Station.SIZE
+  private draw(stationType: StationType): void {
+    const size = StationView.SIZE
 
-    switch (this.stationType) {
+    switch (stationType) {
       case StationType.Circle:
         this.shape.circle(0, 0, size)
         break
 
       case StationType.Triangle: {
-        const triangleSize = size * Station.TRIANGLE_SCALE
-
+        const triangleSize = size * StationView.TRIANGLE_SCALE
         const halfWidth = (Math.sqrt(3) / 2) * triangleSize
-
         const halfHeight = triangleSize / 2
 
         this.shape
@@ -50,7 +43,6 @@ export class Station extends Container {
           .lineTo(halfWidth, halfHeight)
           .lineTo(-halfWidth, halfHeight)
           .closePath()
-
         break
       }
 
@@ -59,9 +51,9 @@ export class Station extends Container {
         break
     }
 
-    this.shape.fill(Station.FILL_COLOR).stroke({
-      color: Station.BORDER_COLOR,
-      width: Station.BORDER_WIDTH,
+    this.shape.fill(StationView.FILL_COLOR).stroke({
+      color: StationView.BORDER_COLOR,
+      width: StationView.BORDER_WIDTH,
     })
   }
 }

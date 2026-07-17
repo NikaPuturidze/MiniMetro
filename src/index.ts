@@ -1,5 +1,5 @@
 import { Application } from 'pixi.js'
-import { Game } from './core/Game'
+import { GameCompositionRoot } from '@/app/GameCompositionRoot'
 
 async function bootstrap(): Promise<void> {
   const app = new Application()
@@ -14,7 +14,7 @@ async function bootstrap(): Promise<void> {
 
   document.body.appendChild(app.canvas)
 
-  const game = new Game(app)
+  const game = GameCompositionRoot.create(app)
   game.start()
 }
 

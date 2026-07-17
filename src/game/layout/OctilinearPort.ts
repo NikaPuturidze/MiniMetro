@@ -1,9 +1,6 @@
-export interface RoutePoint {
-  readonly x: number
-  readonly y: number
-}
+import type { Point } from '@/engine/geometry/Point'
 
-const PORT_DIRECTIONS: readonly RoutePoint[] = [
+const PORT_DIRECTIONS: readonly Point[] = [
   { x: 1, y: 0 },
   { x: Math.SQRT1_2, y: Math.SQRT1_2 },
   { x: 0, y: 1 },
@@ -15,13 +12,13 @@ const PORT_DIRECTIONS: readonly RoutePoint[] = [
 ]
 
 export class OctilinearPort {
-  public static fromVector(vector: RoutePoint): number {
+  public static fromVector(vector: Point): number {
     const angle = Math.atan2(vector.y, vector.x)
 
     return (Math.round(angle / (Math.PI / 4)) + 8) % 8
   }
 
-  public static getDirection(port: number): RoutePoint {
+  public static getDirection(port: number): Point {
     const normalizedPort = ((port % 8) + 8) % 8
     const direction = PORT_DIRECTIONS[normalizedPort]
 

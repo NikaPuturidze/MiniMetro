@@ -1,25 +1,21 @@
-export interface RoutePoint {
-  readonly x: number
-  readonly y: number
-}
+import type { Point } from '@/engine/geometry/Point'
+import type { SegmentRoutingPreference } from '@/game/domain/Route'
 
 interface ConnectionCandidate {
-  readonly points: readonly RoutePoint[]
+  readonly points: readonly Point[]
   readonly startDirection: number
   readonly endDirection: number
 }
 
-export type SegmentRoutingPreference = 'diagonal-first' | 'straight-first'
-
 export class OctilinearRouter {
-  public static route(stations: readonly RoutePoint[]): readonly RoutePoint[] {
+  public static route(stations: readonly Point[]): readonly Point[] {
     const firstStation = stations[0]
 
     if (!firstStation) {
       return []
     }
 
-    const points: RoutePoint[] = [firstStation]
+    const points: Point[] = [firstStation]
 
     for (const segment of this.routeSegments(stations)) {
       for (let index = 1; index < segment.length; index++) {
@@ -35,10 +31,10 @@ export class OctilinearRouter {
   }
 
   public static routeSegments(
-    stations: readonly RoutePoint[],
+    stations: readonly Point[],
     preferences: readonly (SegmentRoutingPreference | undefined)[] = []
-  ): readonly (readonly RoutePoint[])[] {
-    const segments: RoutePoint[][] = []
+  ): readonly (readonly Point[])[] {
+    const segments: Point[][] = []
 
     let previousDirection: number | null = null
 
@@ -66,8 +62,8 @@ export class OctilinearRouter {
   }
 
   private static createCandidates(
-    start: RoutePoint,
-    end: RoutePoint
+    start: Point,
+    end: Point
   ): readonly ConnectionCandidate[] {
     const deltaX = end.x - start.x
     const deltaY = end.y - start.y
@@ -84,12 +80,12 @@ export class OctilinearRouter {
 
     const diagonalDistance = Math.min(absoluteX, absoluteY)
 
-    const diagonalFirstBend: RoutePoint = {
+    const diagonalFirstBend: Point = {
       x: start.x + directionX * diagonalDistance,
       y: start.y + directionY * diagonalDistance,
     }
 
-    let straightFirstBend: RoutePoint
+    let straightFirstBend: Point
 
     if (absoluteX > absoluteY) {
       straightFirstBend = {
@@ -110,7 +106,7 @@ export class OctilinearRouter {
   }
 
   private static createCandidate(
-    points: readonly RoutePoint[]
+    points: readonly Point[]
   ): ConnectionCandidate {
     const first = points[0]
     const second = points[1]
@@ -167,7 +163,7 @@ export class OctilinearRouter {
     return selectedCandidate
   }
 
-  private static getDirection(start: RoutePoint, end: RoutePoint): number {
+  private static getDirection(start: Point, end: Point): number {
     const angle = Math.atan2(end.y - start.y, end.x - start.x)
 
     return (Math.round(angle / (Math.PI / 4)) + 8) % 8

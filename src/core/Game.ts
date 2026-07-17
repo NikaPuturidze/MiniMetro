@@ -7,16 +7,13 @@ export class Game {
 
   private isRunning = false
 
+  // Entry Point of Game
   public constructor(private readonly app: Application) {
     this.app.stage.eventMode = 'static'
     this.app.stage.hitArea = this.app.screen
 
     this.world = new World(this.app.stage)
 
-    /*
-     * Stations exist, but all routes are initially empty
-     * and available in RouteNetwork.
-     */
     this.world.createStation(100, 100, StationType.Circle)
 
     this.world.createStation(250, 280, StationType.Triangle)

@@ -2,8 +2,10 @@ import { Container, FederatedPointerEvent, Graphics } from 'pixi.js'
 import { Route } from '@/entities/Route'
 import { Station } from '@/entities/Station'
 import type { RouteNetwork } from '@/entities/RouteNetwork'
-import { OctilinearRouter } from '@/logic/OctilinearRouter'
-import type { SegmentRoutingPreference } from '@/logic/OctilinearRouter'
+import {
+  OctilinearRouter,
+  type SegmentRoutingPreference,
+} from '@/logic/OctilinearRouter'
 
 interface DragState {
   readonly startStation: Station
@@ -13,7 +15,7 @@ interface DragState {
 interface SegmentDragState {
   readonly route: Route
   readonly segmentIndex: number
-  preference: SegmentRoutingPreference | null
+  routingPreference: SegmentRoutingPreference | null
 }
 
 export class RouteBuilder {
@@ -50,6 +52,8 @@ export class RouteBuilder {
   }
 
   public destroy(): void {
+    this.cancelSegmentDrag()
+
     this.stage.off('pointerdown', this.handlePointerDown)
 
     this.stage.off('globalpointermove', this.handlePointerMove)
@@ -113,7 +117,23 @@ export class RouteBuilder {
 
   private readonly handlePointerMove = (event: FederatedPointerEvent): void => {
     if (this.segmentDragState) {
-      this.updateSegmentDrag(event.getLocalPosition(this.routeNetwork))
+      const hoveredStation = this.findStation(event.target)
+      const pointerPosition = event.getLocalPosition(this.routeNetwork)
+      const routingPreference = hoveredStation
+        ? null
+        : this.getSegmentRoutingPreference(
+            this.segmentDragState.route,
+            this.segmentDragState.segmentIndex,
+            pointerPosition
+          )
+
+      this.segmentDragState.routingPreference = routingPreference
+
+      this.drawSegmentInsertionPreview(
+        this.segmentDragState.route,
+        this.segmentDragState.segmentIndex,
+        hoveredStation ?? pointerPosition
+      )
       return
     }
 
@@ -170,7 +190,27 @@ export class RouteBuilder {
 
   private readonly handlePointerUp = (event: FederatedPointerEvent): void => {
     if (this.segmentDragState) {
+      const dragState = this.segmentDragState
+      const targetStation = this.findStation(event.target)
+
       this.segmentDragState = null
+      this.preview.clear()
+      dragState.route.showAllSegments()
+
+      if (targetStation) {
+        this.routeNetwork.insertStationIntoRoute(
+          dragState.route,
+          dragState.segmentIndex,
+          targetStation
+        )
+      } else if (dragState.routingPreference) {
+        dragState.route.setSegmentRoutingPreference(
+          dragState.segmentIndex,
+          dragState.routingPreference
+        )
+        this.routeNetwork.updateRoutes(dragState.route)
+      }
+
       return
     }
 
@@ -244,13 +284,13 @@ export class RouteBuilder {
   }
 
   private readonly handlePointerUpOutside = (): void => {
-    this.segmentDragState = null
+    this.cancelSegmentDrag()
     this.cancelDrag()
   }
 
   private readonly handleKeyDown = (event: KeyboardEvent): void => {
     if (event.key === 'Escape') {
-      this.segmentDragState = null
+      this.cancelSegmentDrag()
       this.cancelDrag()
     }
   }
@@ -295,43 +335,138 @@ export class RouteBuilder {
   ): void {
     const segmentIndex = this.findNearestSegmentIndex(route, point)
 
-    if (
-      segmentIndex === null ||
-      !this.canChooseSegmentRoute(route, segmentIndex)
-    ) {
+    if (segmentIndex === null) {
       return
     }
 
     this.segmentDragState = {
       route,
       segmentIndex,
-      preference: null,
+      routingPreference: this.getSegmentRoutingPreference(
+        route,
+        segmentIndex,
+        point
+      ),
     }
+    route.hideSegment(segmentIndex)
+    this.drawSegmentInsertionPreview(route, segmentIndex, point)
   }
 
-  private updateSegmentDrag(point: { x: number; y: number }): void {
-    const dragState = this.segmentDragState
+  private getSegmentRoutingPreference(
+    route: Route,
+    segmentIndex: number,
+    pointer: { x: number; y: number }
+  ): SegmentRoutingPreference | null {
+    const stations = route.getStations()
+    const start = stations[segmentIndex]
+    const end = stations[segmentIndex + 1]
 
-    if (!dragState) {
+    if (!start || !end) {
+      return null
+    }
+
+    const deltaX = end.x - start.x
+    const deltaY = end.y - start.y
+    const absoluteX = Math.abs(deltaX)
+    const absoluteY = Math.abs(deltaY)
+
+    if (
+      absoluteX === 0 ||
+      absoluteY === 0 ||
+      Math.abs(absoluteX - absoluteY) < Number.EPSILON
+    ) {
+      return null
+    }
+
+    const directionX = Math.sign(deltaX)
+    const directionY = Math.sign(deltaY)
+    const diagonalDistance = Math.min(absoluteX, absoluteY)
+    const diagonalFirstPoint = {
+      x: start.x + directionX * diagonalDistance,
+      y: start.y + directionY * diagonalDistance,
+    }
+    const straightFirstPoint =
+      absoluteX > absoluteY
+        ? {
+            x: start.x + directionX * (absoluteX - absoluteY),
+            y: start.y,
+          }
+        : {
+            x: start.x,
+            y: start.y + directionY * (absoluteY - absoluteX),
+          }
+    const diagonalFirstDistance = Math.hypot(
+      pointer.x - diagonalFirstPoint.x,
+      pointer.y - diagonalFirstPoint.y
+    )
+    const straightFirstDistance = Math.hypot(
+      pointer.x - straightFirstPoint.x,
+      pointer.y - straightFirstPoint.y
+    )
+    return diagonalFirstDistance <= straightFirstDistance
+      ? 'diagonal-first'
+      : 'straight-first'
+  }
+
+  private drawSegmentInsertionPreview(
+    route: Route,
+    segmentIndex: number,
+    insertionPoint: { x: number; y: number }
+  ): void {
+    const stations = route.getStations()
+
+    if (!stations[segmentIndex] || !stations[segmentIndex + 1]) {
+      this.preview.clear()
       return
     }
 
-    const preference = this.getSegmentPreferenceForPoint(
-      dragState.route,
-      dragState.segmentIndex,
-      point
-    )
+    const startStation = stations[segmentIndex]
+    const endStation = stations[segmentIndex + 1]
 
-    if (!preference || preference === dragState.preference) {
+    if (!startStation || !endStation) {
+      this.preview.clear()
       return
     }
 
-    dragState.route.setSegmentRoutingPreference(
-      dragState.segmentIndex,
-      preference
-    )
-    dragState.preference = preference
-    this.routeNetwork.updateRoutes(dragState.route)
+    const previewStations = [
+      { x: startStation.x, y: startStation.y },
+      { x: insertionPoint.x, y: insertionPoint.y },
+      { x: endStation.x, y: endStation.y },
+    ]
+
+    const points = OctilinearRouter.route(previewStations)
+    const first = points[0]
+
+    this.preview.clear()
+
+    if (!first) {
+      return
+    }
+
+    this.preview.moveTo(first.x, first.y)
+
+    for (const point of points.slice(1)) {
+      this.preview.lineTo(point.x, point.y)
+    }
+
+    this.preview.stroke({
+      color: route.color,
+      width: Route.LINE_WIDTH,
+      alpha: RouteBuilder.PREVIEW_ALPHA,
+      cap: 'butt',
+      join: 'round',
+    })
+  }
+
+  private cancelSegmentDrag(): void {
+    const route = this.segmentDragState?.route
+
+    this.segmentDragState = null
+    this.preview.clear()
+
+    if (route) {
+      route.showAllSegments()
+    }
   }
 
   private findNearestSegmentIndex(
@@ -361,62 +496,6 @@ export class RouteBuilder {
     })
 
     return nearestIndex
-  }
-
-  private canChooseSegmentRoute(route: Route, segmentIndex: number): boolean {
-    const start = route.getStations()[segmentIndex]
-    const end = route.getStations()[segmentIndex + 1]
-
-    return (
-      !!start &&
-      !!end &&
-      start.x !== end.x &&
-      start.y !== end.y &&
-      Math.abs(start.x - end.x) !== Math.abs(start.y - end.y)
-    )
-  }
-
-  private getSegmentPreferenceForPoint(
-    route: Route,
-    segmentIndex: number,
-    point: { x: number; y: number }
-  ): SegmentRoutingPreference | null {
-    const start = route.getStations()[segmentIndex]
-    const end = route.getStations()[segmentIndex + 1]
-
-    if (!start || !end) {
-      return null
-    }
-
-    const deltaX = end.x - start.x
-    const deltaY = end.y - start.y
-    const diagonalDistance = Math.min(Math.abs(deltaX), Math.abs(deltaY))
-    const diagonalFirstBend = {
-      x: start.x + Math.sign(deltaX) * diagonalDistance,
-      y: start.y + Math.sign(deltaY) * diagonalDistance,
-    }
-    const straightFirstBend =
-      Math.abs(deltaX) > Math.abs(deltaY)
-        ? {
-            x:
-              start.x +
-              Math.sign(deltaX) * (Math.abs(deltaX) - Math.abs(deltaY)),
-            y: start.y,
-          }
-        : {
-            x: start.x,
-            y:
-              start.y +
-              Math.sign(deltaY) * (Math.abs(deltaY) - Math.abs(deltaX)),
-          }
-
-    return Math.hypot(
-      point.x - diagonalFirstBend.x,
-      point.y - diagonalFirstBend.y
-    ) <=
-      Math.hypot(point.x - straightFirstBend.x, point.y - straightFirstBend.y)
-      ? 'diagonal-first'
-      : 'straight-first'
   }
 
   private getDistanceToLineSegment(

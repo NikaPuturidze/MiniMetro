@@ -12,10 +12,11 @@ export class Route extends Graphics {
   public static readonly LINE_WIDTH = 10
 
   private hiddenTerminalStation: Station | null = null
+  private hiddenSegmentIndex: number | null = null
   private singleStationTerminalPort = 6
 
-  private static readonly TERMINAL_EXTENSION = 40
-  private static readonly TERMINAL_CAP_LENGTH = 40
+  private static readonly TERMINAL_EXTENSION = 48
+  private static readonly TERMINAL_CAP_LENGTH = 30
   private static readonly CORNER_RADIUS = 10
 
   private readonly stations: Station[] = []
@@ -60,12 +61,15 @@ export class Route extends Graphics {
     const index = this.stations.indexOf(station)
 
     if (index !== -1) {
+      this.preserveCurrentSegmentRoutingPreferences()
       this.stations.splice(index, 1)
     }
   }
 
   public clearStations(): void {
     this.stations.length = 0
+    this.segmentRoutingPreferences.clear()
+    this.hiddenSegmentIndex = null
   }
 
   public setSegmentSpanLaneOffsets(
@@ -90,10 +94,6 @@ export class Route extends Graphics {
     }
 
     if (this.stations.at(-1) === station) {
-      /*
-       * The final segment is directed into the station, so its local normal
-       * is opposite the outward-facing normal used by terminal caps.
-       */
       return -(this.segmentSpanLaneOffsets.at(-1)?.at(-1) ?? 0)
     }
 
@@ -141,6 +141,24 @@ export class Route extends Graphics {
     this.hiddenTerminalStation = null
   }
 
+  public hideSegment(segmentIndex: number): void {
+    if (segmentIndex < 0 || segmentIndex >= this.stations.length - 1) {
+      return
+    }
+
+    this.hiddenSegmentIndex = segmentIndex
+    this.redraw()
+  }
+
+  public showAllSegments(): void {
+    if (this.hiddenSegmentIndex === null) {
+      return
+    }
+
+    this.hiddenSegmentIndex = null
+    this.redraw()
+  }
+
   public removeTerminalStation(station: Station): boolean {
     if (this.stations.length === 0) {
       return false
@@ -154,6 +172,7 @@ export class Route extends Graphics {
     if (this.stations[0] === station) {
       const remainingPort = this.endTerminalPort ?? 6
 
+      this.preserveCurrentSegmentRoutingPreferences()
       this.stations.shift()
 
       if (this.stations.length === 1) {
@@ -166,6 +185,7 @@ export class Route extends Graphics {
     if (this.stations.at(-1) === station) {
       const remainingPort = this.startTerminalPort ?? 6
 
+      this.preserveCurrentSegmentRoutingPreferences()
       this.stations.pop()
 
       if (this.stations.length === 1) {
@@ -301,6 +321,10 @@ export class Route extends Graphics {
     }
 
     routedSegments.forEach((centerPoints, segmentIndex) => {
+      if (segmentIndex === this.hiddenSegmentIndex) {
+        return
+      }
+
       const points = PolylineOffset.calculate(
         centerPoints,
         this.getSegmentSpanLaneOffsets(segmentIndex)
@@ -330,7 +354,6 @@ export class Route extends Graphics {
 
     const endDirection = OctilinearPort.getDirection(endPort)
 
-    /* Terminal gaps are always radial from the station centre. */
     const startOrigin: RoutePoint = {
       x: firstStation.x,
       y: firstStation.y,
@@ -392,14 +415,29 @@ export class Route extends Graphics {
 
   public appendStation(station: Station): void {
     if (!this.hasStation(station)) {
+      this.preserveCurrentSegmentRoutingPreferences()
       this.stations.push(station)
     }
   }
 
   public prependStation(station: Station): void {
     if (!this.hasStation(station)) {
+      this.preserveCurrentSegmentRoutingPreferences()
       this.stations.unshift(station)
     }
+  }
+
+  public insertStation(index: number, station: Station): void {
+    if (this.hasStation(station)) {
+      return
+    }
+
+    if (index < 0 || index > this.stations.length) {
+      throw new RangeError('Station insertion index is outside the route.')
+    }
+
+    this.preserveCurrentSegmentRoutingPreferences()
+    this.stations.splice(index, 0, station)
   }
 
   private drawRoundedPath(
@@ -529,6 +567,57 @@ export class Route extends Graphics {
       terminal.x + normal.x * halfLength,
       terminal.y + normal.y * halfLength
     )
+  }
+
+  private preserveCurrentSegmentRoutingPreferences(): void {
+    const routedSegments = this.getRoutedSegments()
+
+    for (
+      let segmentIndex = 0;
+      segmentIndex < routedSegments.length;
+      segmentIndex++
+    ) {
+      const start = this.stations[segmentIndex]
+      const end = this.stations[segmentIndex + 1]
+      const bend = routedSegments[segmentIndex]?.[1]
+
+      if (!start || !end || !bend) {
+        continue
+      }
+
+      const key = this.getSegmentKey(start, end)
+
+      if (this.segmentRoutingPreferences.has(key)) {
+        continue
+      }
+
+      const deltaX = end.x - start.x
+      const deltaY = end.y - start.y
+      const absoluteX = Math.abs(deltaX)
+      const absoluteY = Math.abs(deltaY)
+
+      if (
+        absoluteX === 0 ||
+        absoluteY === 0 ||
+        Math.abs(absoluteX - absoluteY) < Number.EPSILON
+      ) {
+        continue
+      }
+
+      const diagonalDistance = Math.min(absoluteX, absoluteY)
+      const diagonalFirstBend = {
+        x: start.x + Math.sign(deltaX) * diagonalDistance,
+        y: start.y + Math.sign(deltaY) * diagonalDistance,
+      }
+
+      this.segmentRoutingPreferences.set(
+        key,
+        Math.hypot(bend.x - diagonalFirstBend.x, bend.y - diagonalFirstBend.y) <
+          0.001
+          ? 'diagonal-first'
+          : 'straight-first'
+      )
+    }
   }
 
   private getSegmentKey(start: Station, end: Station): string {

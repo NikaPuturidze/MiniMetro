@@ -327,6 +327,36 @@ export class RouteNetwork extends Container {
     return 'added'
   }
 
+  public insertStationIntoRoute(
+    route: Route,
+    segmentIndex: number,
+    station: Station
+  ): AddStationResult {
+    this.ensureRouteBelongsToNetwork(route)
+
+    if (route.hasStation(station)) {
+      return 'already-connected'
+    }
+
+    const stations = route.getStations()
+
+    if (!stations[segmentIndex] || !stations[segmentIndex + 1]) {
+      throw new RangeError('Route segment index is outside the route.')
+    }
+
+    if (
+      this.getRoutesForStation(station).length >=
+      RouteNetwork.MAX_ROUTES_PER_STATION
+    ) {
+      return 'station-capacity-reached'
+    }
+
+    route.insertStation(segmentIndex + 1, station)
+    this.updateRoutes(route)
+
+    return 'added'
+  }
+
   public removeStationFromRoute(route: Route, station: Station): void {
     this.ensureRouteBelongsToNetwork(route)
 

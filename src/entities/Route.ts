@@ -1,22 +1,31 @@
 import { Graphics } from 'pixi.js'
 import type { Station } from '@/entities/Station'
-import { OctilinearRouter, type RoutePoint } from '@/logic/OctilinearRouter'
+import {
+  OctilinearRouter,
+  type RoutePoint,
+  type SegmentRoutingPreference,
+} from '@/logic/OctilinearRouter'
 import { PolylineOffset } from '@/logic/PolylineOffset'
 import { OctilinearPort } from '@/logic/OctilinearPort'
 
 export class Route extends Graphics {
-  public static readonly LINE_WIDTH = 8
+  public static readonly LINE_WIDTH = 10
 
   private hiddenTerminalStation: Station | null = null
   private singleStationTerminalPort = 6
 
-  private static readonly TERMINAL_EXTENSION = 30
-  private static readonly TERMINAL_CAP_LENGTH = 20
+  private static readonly TERMINAL_EXTENSION = 40
+  private static readonly TERMINAL_CAP_LENGTH = 40
   private static readonly CORNER_RADIUS = 10
 
   private readonly stations: Station[] = []
 
-  private segmentLaneOffsets: number[] = []
+  private readonly segmentRoutingPreferences = new Map<
+    string,
+    SegmentRoutingPreference
+  >()
+
+  private segmentSpanLaneOffsets: number[][] = []
 
   private startTerminalPort: number | null = null
   private endTerminalPort: number | null = null
@@ -26,6 +35,9 @@ export class Route extends Graphics {
 
   public constructor(public readonly color: number) {
     super()
+
+    this.eventMode = 'static'
+    this.cursor = 'pointer'
   }
 
   public get isEmpty(): boolean {
@@ -56,21 +68,33 @@ export class Route extends Graphics {
     this.stations.length = 0
   }
 
-  public setSegmentLaneOffsets(offsets: readonly number[]): void {
-    this.segmentLaneOffsets = [...offsets]
+  public setSegmentSpanLaneOffsets(
+    offsets: readonly (readonly number[])[]
+  ): void {
+    this.segmentSpanLaneOffsets = offsets.map((segmentOffsets) => [
+      ...segmentOffsets,
+    ])
   }
 
-  public getSegmentLaneOffset(segmentIndex: number): number {
-    return this.segmentLaneOffsets[segmentIndex] ?? 0
+  public getSegmentSpanLaneOffsets(segmentIndex: number): readonly number[] {
+    return this.segmentSpanLaneOffsets[segmentIndex] ?? []
+  }
+
+  public getSpanLaneOffset(segmentIndex: number, spanIndex: number): number {
+    return this.segmentSpanLaneOffsets[segmentIndex]?.[spanIndex] ?? 0
   }
 
   public getTerminalLaneOffset(station: Station): number {
     if (this.stations[0] === station) {
-      return this.segmentLaneOffsets[0] ?? 0
+      return this.getSpanLaneOffset(0, 0)
     }
 
     if (this.stations.at(-1) === station) {
-      return this.segmentLaneOffsets.at(-1) ?? 0
+      /*
+       * The final segment is directed into the station, so its local normal
+       * is opposite the outward-facing normal used by terminal caps.
+       */
+      return -(this.segmentSpanLaneOffsets.at(-1)?.at(-1) ?? 0)
     }
 
     return 0
@@ -84,6 +108,18 @@ export class Route extends Graphics {
     if (this.stations.at(-1) === station) {
       this.endTerminalPort = port
     }
+  }
+
+  public getTerminalPort(station: Station): number | null {
+    if (this.stations[0] === station) {
+      return this.startTerminalPort
+    }
+
+    if (this.stations.at(-1) === station) {
+      return this.endTerminalPort
+    }
+
+    return null
   }
 
   public resetTerminalPorts(): void {
@@ -155,7 +191,7 @@ export class Route extends Graphics {
       return []
     }
 
-    const segments = OctilinearRouter.routeSegments(this.stations)
+    const segments = this.getRoutedSegments()
 
     const ports: number[] = []
 
@@ -217,6 +253,36 @@ export class Route extends Graphics {
     return this.endTerminalPosition
   }
 
+  public getRoutedSegments(): readonly (readonly RoutePoint[])[] {
+    return OctilinearRouter.routeSegments(
+      this.stations,
+      this.stations.slice(1).map((station, index) => {
+        const start = this.stations[index]
+
+        return start
+          ? this.segmentRoutingPreferences.get(
+              this.getSegmentKey(start, station)
+            )
+          : undefined
+      })
+    )
+  }
+
+  public setSegmentRoutingPreference(
+    segmentIndex: number,
+    preference: SegmentRoutingPreference
+  ): void {
+    const start = this.stations[segmentIndex]
+    const end = this.stations[segmentIndex + 1]
+
+    if (start && end) {
+      this.segmentRoutingPreferences.set(
+        this.getSegmentKey(start, end),
+        preference
+      )
+    }
+  }
+
   public redraw(): void {
     this.clear()
 
@@ -228,7 +294,7 @@ export class Route extends Graphics {
       return
     }
 
-    const routedSegments = OctilinearRouter.routeSegments(this.stations)
+    const routedSegments = this.getRoutedSegments()
 
     if (routedSegments.length === 0) {
       return
@@ -237,7 +303,7 @@ export class Route extends Graphics {
     routedSegments.forEach((centerPoints, segmentIndex) => {
       const points = PolylineOffset.calculate(
         centerPoints,
-        this.getSegmentLaneOffset(segmentIndex)
+        this.getSegmentSpanLaneOffsets(segmentIndex)
       )
 
       const roundable = points.map(
@@ -465,4 +531,7 @@ export class Route extends Graphics {
     )
   }
 
+  private getSegmentKey(start: Station, end: Station): string {
+    return `${start.id}:${end.id}`
+  }
 }

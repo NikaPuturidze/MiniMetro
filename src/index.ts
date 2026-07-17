@@ -8,7 +8,7 @@ async function bootstrap(): Promise<void> {
     resizeTo: window,
     antialias: true,
     autoDensity: true,
-    resolution: Math.min(window.devicePixelRatio, 5),
+    resolution: Math.min(window.devicePixelRatio, 10),
     backgroundColor: 0xeeeeee,
   })
 

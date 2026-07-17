@@ -9,6 +9,8 @@ interface ConnectionCandidate {
   readonly endDirection: number
 }
 
+export type SegmentRoutingPreference = 'diagonal-first' | 'straight-first'
+
 export class OctilinearRouter {
   public static route(stations: readonly RoutePoint[]): readonly RoutePoint[] {
     const firstStation = stations[0]
@@ -33,7 +35,8 @@ export class OctilinearRouter {
   }
 
   public static routeSegments(
-    stations: readonly RoutePoint[]
+    stations: readonly RoutePoint[],
+    preferences: readonly (SegmentRoutingPreference | undefined)[] = []
   ): readonly (readonly RoutePoint[])[] {
     const segments: RoutePoint[][] = []
 
@@ -42,7 +45,6 @@ export class OctilinearRouter {
     for (let index = 1; index < stations.length; index++) {
       const start = stations[index - 1]
       const end = stations[index]
-      const next = stations[index + 1]
 
       if (!start || !end) {
         continue
@@ -53,8 +55,7 @@ export class OctilinearRouter {
       const candidate = this.selectCandidate(
         candidates,
         previousDirection,
-        end,
-        next
+        preferences[index - 1]
       )
 
       segments.push([...candidate.points])
@@ -130,8 +131,7 @@ export class OctilinearRouter {
   private static selectCandidate(
     candidates: readonly ConnectionCandidate[],
     previousDirection: number | null,
-    currentStation: RoutePoint,
-    nextStation?: RoutePoint
+    preference?: SegmentRoutingPreference
   ): ConnectionCandidate {
     const firstCandidate = candidates[0]
 
@@ -139,20 +139,28 @@ export class OctilinearRouter {
       throw new Error('No route candidate available.')
     }
 
+    if (preference) {
+      const preferredCandidate =
+        candidates[preference === 'diagonal-first' ? 0 : 1]
+
+      if (preferredCandidate) {
+        return preferredCandidate
+      }
+    }
+
     let selectedCandidate = firstCandidate
     let smallestScore = Number.POSITIVE_INFINITY
 
+    /*
+     * Do not use the following station as a look-ahead here. It can flip
+     * an already drawn segment from diagonal-first to straight-first when
+     * a route is extended, despite both shapes being valid.
+     */
     for (const candidate of candidates) {
       let score = 0
 
       if (previousDirection !== null) {
         score += this.getTurnCost(previousDirection, candidate.startDirection)
-      }
-
-      if (nextStation) {
-        const nextDirection = this.getDirection(currentStation, nextStation)
-
-        score += this.getTurnCost(candidate.endDirection, nextDirection)
       }
 
       if (score < smallestScore) {

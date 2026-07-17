@@ -2,7 +2,7 @@ import { Container, Graphics } from 'pixi.js'
 import { StationType } from '@/constants/StationType'
 
 export class Station extends Container {
-  private static readonly SIZE = 14
+  private static readonly SIZE = 16
   private static readonly TRIANGLE_SCALE = 4 / 3
   private static readonly FILL_COLOR = 0xeeeeee
   private static readonly BORDER_COLOR = 0x222222

@@ -1,13 +1,18 @@
 import { Container } from 'pixi.js'
 import type { Station } from '@/entities/Station'
 import { Route } from './Route'
-import { OctilinearPort } from '@/logic/OctilinearPort'
-import { OctilinearRouter } from '@/logic/OctilinearRouter'
 
 interface CorridorUsage {
   readonly route: Route
   readonly segmentIndex: number
+  readonly spanIndex: number
   readonly forward: boolean
+}
+
+interface TrackSpan extends CorridorUsage {
+  readonly lineKey: string
+  readonly minimum: number
+  readonly maximum: number
 }
 
 export type RouteBuildResult =
@@ -46,10 +51,17 @@ export type AddStationResult =
 export class RouteNetwork extends Container {
   public static readonly MAX_ROUTES_PER_STATION = 3
 
-  /* Adjacent Mini Metro route lanes meet edge-to-edge without a gap. */
+  /* Each route retains its full, equal lane width alongside its neighbours. */
   private static readonly LANE_SPACING = Route.LINE_WIDTH
   /* Starts outside a station's hit area, preserving station clicks. */
   private static readonly TERMINAL_EDGE_INSET = 24
+  /*
+   * Break equal-angle terminal choices with cardinal edges first. The values
+   * follow OctilinearPort's clockwise numbering: E, SE, S, SW, W, NW, N, NE.
+   */
+  private static readonly TERMINAL_PORT_TIE_BREAK_PRIORITY = [
+    6, 2, 4, 0, 5, 7, 3, 1,
+  ]
 
   private readonly routes: Route[] = []
 
@@ -106,7 +118,7 @@ export class RouteNetwork extends Container {
      */
     if (targetStation === fromStation) {
       route.removeTerminalStation(fromStation)
-      this.updateRoutes()
+      this.updateRoutes(route)
 
       return {
         status: 'removed',
@@ -125,7 +137,7 @@ export class RouteNetwork extends Container {
      */
     if (adjacentStation === targetStation) {
       route.removeTerminalStation(fromStation)
-      this.updateRoutes()
+      this.updateRoutes(route)
 
       return {
         status: 'removed',
@@ -156,7 +168,7 @@ export class RouteNetwork extends Container {
       route.appendStation(targetStation)
     }
 
-    this.updateRoutes()
+    this.updateRoutes(route)
 
     return {
       status: 'connected',
@@ -191,7 +203,7 @@ export class RouteNetwork extends Container {
     route.appendStation(start)
     route.appendStation(end)
 
-    this.updateRoutes()
+    this.updateRoutes(route)
 
     return {
       status: 'connected',
@@ -230,7 +242,7 @@ export class RouteNetwork extends Container {
       route.appendStation(targetStation)
     }
 
-    this.updateRoutes()
+    this.updateRoutes(route)
 
     return {
       status: 'connected',
@@ -310,7 +322,7 @@ export class RouteNetwork extends Container {
     }
 
     route.appendStation(station)
-    this.updateRoutes()
+    this.updateRoutes(route)
 
     return 'added'
   }
@@ -319,17 +331,17 @@ export class RouteNetwork extends Container {
     this.ensureRouteBelongsToNetwork(route)
 
     route.removeStation(station)
-    this.updateRoutes()
+    this.updateRoutes(route)
   }
 
   public clearRoute(route: Route): void {
     this.ensureRouteBelongsToNetwork(route)
 
     route.clearStations()
-    this.updateRoutes()
+    this.updateRoutes(route)
   }
 
-  public updateRoutes(): void {
+  public updateRoutes(changedRoute?: Route): void {
     /*
      * Clearing every graphic first also removes visuals left behind by a
      * route that just became available.
@@ -339,16 +351,22 @@ export class RouteNetwork extends Container {
     }
 
     const activeRoutes = this.routes.filter((route) => !route.isEmpty)
+    const mutableRoutes = new Set<Route>()
 
     for (const route of activeRoutes) {
       route.resetTerminalPorts()
+    }
 
-      route.setSegmentLaneOffsets(
-        new Array(Math.max(route.stationCount - 1, 0)).fill(0)
+    if (changedRoute && activeRoutes.includes(changedRoute)) {
+      mutableRoutes.add(changedRoute)
+      changedRoute.setSegmentSpanLaneOffsets(
+        changedRoute
+          .getRoutedSegments()
+          .map((points) => new Array(Math.max(points.length - 1, 0)).fill(0))
       )
     }
 
-    this.updateSegmentLaneOffsets(activeRoutes)
+    this.updateSegmentLaneOffsets(activeRoutes, mutableRoutes)
     this.updateTerminalPorts(activeRoutes)
 
     for (const route of activeRoutes) {
@@ -367,14 +385,20 @@ export class RouteNetwork extends Container {
     )
   }
 
-  private updateSegmentLaneOffsets(activeRoutes: readonly Route[]): void {
-    const offsetsByRoute = new Map<Route, number[]>()
+  private updateSegmentLaneOffsets(
+    activeRoutes: readonly Route[],
+    mutableRoutes: ReadonlySet<Route>
+  ): void {
+    const offsetsByRoute = new Map<Route, number[][]>()
 
-    const corridorUsages = new Map<string, CorridorUsage[]>()
+    /*
+     * A segment may be considered by groups at both of its ends. Keep the
+     * lane assignment from the busier junction so a two-route endpoint
+     * cannot collapse lanes that were separated at a three-route junction.
+     */
+    const lanePrioritiesByRoute = new Map<Route, number[][]>()
 
-    const departureUsages = new Map<string, CorridorUsage[]>()
-
-    const arrivalUsages = new Map<string, CorridorUsage[]>()
+    const trackSpans: TrackSpan[] = []
 
     const routeOrder = new Map<Route, number>()
 
@@ -384,12 +408,24 @@ export class RouteNetwork extends Container {
 
     for (const route of activeRoutes) {
       const stations = route.getStations()
+      const routedSegments = route.getRoutedSegments()
 
-      const offsets = new Array(Math.max(stations.length - 1, 0)).fill(0)
+      const offsets = routedSegments.map((points, segmentIndex) =>
+        points
+          .slice(1)
+          .map((_, spanIndex) =>
+            mutableRoutes.has(route)
+              ? 0
+              : route.getSpanLaneOffset(segmentIndex, spanIndex)
+          )
+      )
+
+      const lanePriorities = offsets.map((segmentOffsets) =>
+        new Array(segmentOffsets.length).fill(0)
+      )
 
       offsetsByRoute.set(route, offsets)
-
-      const routedSegments = OctilinearRouter.routeSegments(stations)
+      lanePrioritiesByRoute.set(route, lanePriorities)
 
       for (let index = 0; index < stations.length - 1; index++) {
         const start = stations[index]
@@ -399,22 +435,6 @@ export class RouteNetwork extends Container {
           continue
         }
 
-        const lowerId = Math.min(start.id, end.id)
-
-        const higherId = Math.max(start.id, end.id)
-
-        const key = `${lowerId}:${higherId}`
-
-        const usages = corridorUsages.get(key) ?? []
-
-        usages.push({
-          route,
-          segmentIndex: index,
-          forward: start.id === lowerId,
-        })
-
-        corridorUsages.set(key, usages)
-
         const routedSegment = routedSegments[index]
         const firstPoint = routedSegment?.[0]
         const nextPoint = routedSegment?.[1]
@@ -423,72 +443,324 @@ export class RouteNetwork extends Container {
           continue
         }
 
-        const departureDirection = OctilinearPort.fromVector({
-          x: nextPoint.x - firstPoint.x,
-          y: nextPoint.y - firstPoint.y,
-        })
-
-        const departureKey = `${start.id}:${departureDirection}`
-
-        const departures = departureUsages.get(departureKey) ?? []
-
-        departures.push({
-          route,
-          segmentIndex: index,
-          forward: true,
-        })
-
-        departureUsages.set(departureKey, departures)
-
-        const beforeLastPoint = routedSegment.at(-2)
-        const lastPoint = routedSegment.at(-1)
-
-        if (!beforeLastPoint || !lastPoint) {
-          continue
-        }
-
-        const arrivalDirection = OctilinearPort.fromVector({
-          x: beforeLastPoint.x - lastPoint.x,
-          y: beforeLastPoint.y - lastPoint.y,
-        })
-
-        const arrivalKey = `${end.id}:${arrivalDirection}`
-
-        const arrivals = arrivalUsages.get(arrivalKey) ?? []
-
-        arrivals.push({
-          route,
-          segmentIndex: index,
-          forward: true,
-        })
-
-        arrivalUsages.set(arrivalKey, arrivals)
+        this.collectTrackSpans(trackSpans, route, index, routedSegment)
       }
     }
 
-    this.applyLaneOffsets(corridorUsages, offsetsByRoute, routeOrder, true)
+    const trackOverlapGroups = this.createTrackOverlapGroups(trackSpans)
 
-    /*
-     * Different destinations can still share the first visible stretch of
-     * track.  Give routes leaving the same station through the same port
-     * their own lanes, so they remain visible until their paths diverge.
-     */
-    this.applyLaneOffsets(departureUsages, offsetsByRoute, routeOrder, false)
+    this.applyLaneOffsets(
+      trackOverlapGroups,
+      offsetsByRoute,
+      lanePrioritiesByRoute,
+      routeOrder,
+      true,
+      mutableRoutes
+    )
 
-    this.applyLaneOffsets(arrivalUsages, offsetsByRoute, routeOrder, false)
+    this.preserveLaneContinuityAtStations(
+      activeRoutes,
+      offsetsByRoute,
+      lanePrioritiesByRoute,
+      mutableRoutes
+    )
 
     for (const [route, offsets] of offsetsByRoute) {
-      route.setSegmentLaneOffsets(offsets)
+      route.setSegmentSpanLaneOffsets(offsets)
     }
+  }
+
+  private preserveLaneContinuityAtStations(
+    activeRoutes: readonly Route[],
+    offsetsByRoute: ReadonlyMap<Route, number[][]>,
+    lanePrioritiesByRoute: ReadonlyMap<Route, number[][]>,
+    mutableRoutes: ReadonlySet<Route>
+  ): void {
+    for (const route of activeRoutes) {
+      if (!mutableRoutes.has(route) || route.stationCount < 3) {
+        continue
+      }
+
+      const offsets = offsetsByRoute.get(route)
+      const priorities = lanePrioritiesByRoute.get(route)
+
+      if (!offsets || !priorities) {
+        continue
+      }
+
+      for (
+        let stationIndex = 1;
+        stationIndex < route.stationCount - 1;
+        stationIndex++
+      ) {
+        const incomingOffsets = offsets[stationIndex - 1]
+        const outgoingOffsets = offsets[stationIndex]
+        const incomingPriorities = priorities[stationIndex - 1]
+        const outgoingPriorities = priorities[stationIndex]
+        const incomingSpanIndex = (incomingOffsets?.length ?? 0) - 1
+
+        if (
+          !incomingOffsets ||
+          !outgoingOffsets ||
+          !incomingPriorities ||
+          !outgoingPriorities ||
+          incomingSpanIndex < 0 ||
+          outgoingOffsets.length === 0
+        ) {
+          continue
+        }
+
+        const incomingLane = this.getNearestSharedLane(
+          incomingOffsets,
+          incomingPriorities,
+          false
+        )
+        const outgoingLane = this.getNearestSharedLane(
+          outgoingOffsets,
+          outgoingPriorities,
+          true
+        )
+
+        /*
+         * An octilinear segment can bend immediately outside the station.
+         * Carry a shared lane across that unshared connector span first.
+         */
+        if (
+          incomingLane &&
+          (incomingPriorities[incomingSpanIndex] ?? 0) === 0
+        ) {
+          incomingOffsets[incomingSpanIndex] = incomingLane.offset
+        }
+
+        if (outgoingLane && (outgoingPriorities[0] ?? 0) === 0) {
+          outgoingOffsets[0] = outgoingLane.offset
+        }
+
+        /*
+         * When a route joins a shared corridor at a station, carry its lane
+         * onto the adjacent unshared branch. This prevents that branch from
+         * lining up with another colour through the station. Never overwrite
+         * a span that already belongs to its own shared corridor.
+         */
+        if (!incomingLane && outgoingLane) {
+          incomingOffsets[incomingSpanIndex] = outgoingLane.offset
+          continue
+        }
+
+        if (!outgoingLane && incomingLane) {
+          outgoingOffsets[0] = incomingLane.offset
+        }
+      }
+    }
+  }
+
+  private getNearestSharedLane(
+    offsets: readonly number[],
+    priorities: readonly number[],
+    fromStart: boolean
+  ): { readonly offset: number } | null {
+    for (let step = 0; step < priorities.length; step++) {
+      const index = fromStart ? step : priorities.length - step - 1
+      const priority = priorities[index] ?? 0
+
+      if (priority > 0) {
+        return {
+          offset: offsets[index] ?? 0,
+        }
+      }
+    }
+
+    return null
+  }
+
+  private collectTrackSpans(
+    spans: TrackSpan[],
+    route: Route,
+    segmentIndex: number,
+    points: readonly { x: number; y: number }[]
+  ): void {
+    for (let spanIndex = 0; spanIndex < points.length - 1; spanIndex++) {
+      const start = points[spanIndex]
+      const end = points[spanIndex + 1]
+
+      if (!start || !end) {
+        continue
+      }
+
+      const span = this.createTrackSpan(
+        route,
+        segmentIndex,
+        spanIndex,
+        start,
+        end
+      )
+
+      if (span) {
+        spans.push(span)
+      }
+    }
+  }
+
+  private createTrackSpan(
+    route: Route,
+    segmentIndex: number,
+    spanIndex: number,
+    start: { x: number; y: number },
+    end: { x: number; y: number }
+  ): TrackSpan | null {
+    const deltaX = end.x - start.x
+    const deltaY = end.y - start.y
+    const epsilon = 0.001
+
+    if (Math.abs(deltaX) < epsilon && Math.abs(deltaY) < epsilon) {
+      return null
+    }
+
+    let lineKey: string
+    let startPosition: number
+    let endPosition: number
+    let forward: boolean
+
+    if (Math.abs(deltaY) < epsilon) {
+      lineKey = `h:${this.getTrackCoordinateKey(start.y)}`
+      startPosition = start.x
+      endPosition = end.x
+      forward = deltaX > 0
+    } else if (Math.abs(deltaX) < epsilon) {
+      lineKey = `v:${this.getTrackCoordinateKey(start.x)}`
+      startPosition = start.y
+      endPosition = end.y
+      forward = deltaY > 0
+    } else {
+      const positiveSlope = Math.sign(deltaX) === Math.sign(deltaY)
+      const invariant = positiveSlope ? start.y - start.x : start.y + start.x
+
+      lineKey = `${positiveSlope ? 'd+' : 'd-'}:${this.getTrackCoordinateKey(invariant)}`
+      startPosition = start.x
+      endPosition = end.x
+      forward = deltaX > 0
+    }
+
+    return {
+      route,
+      segmentIndex,
+      spanIndex,
+      forward,
+      lineKey,
+      minimum: Math.min(startPosition, endPosition),
+      maximum: Math.max(startPosition, endPosition),
+    }
+  }
+
+  private createTrackOverlapGroups(
+    spans: readonly TrackSpan[]
+  ): ReadonlyMap<string, CorridorUsage[]> {
+    const spansByLine = new Map<string, TrackSpan[]>()
+
+    for (const span of spans) {
+      const lineSpans = spansByLine.get(span.lineKey) ?? []
+
+      lineSpans.push(span)
+      spansByLine.set(span.lineKey, lineSpans)
+    }
+
+    const groups = new Map<string, CorridorUsage[]>()
+    let groupIndex = 0
+
+    for (const [lineKey, lineSpans] of spansByLine) {
+      const visited = new Set<number>()
+
+      for (let startIndex = 0; startIndex < lineSpans.length; startIndex++) {
+        if (visited.has(startIndex)) {
+          continue
+        }
+
+        const pending = [startIndex]
+        const component: TrackSpan[] = []
+        visited.add(startIndex)
+
+        while (pending.length > 0) {
+          const currentIndex = pending.pop()
+          const current =
+            currentIndex === undefined ? undefined : lineSpans[currentIndex]
+
+          if (!current) {
+            continue
+          }
+
+          component.push(current)
+
+          lineSpans.forEach((candidate, candidateIndex) => {
+            if (
+              visited.has(candidateIndex) ||
+              !this.trackSpansOverlap(current, candidate)
+            ) {
+              return
+            }
+
+            visited.add(candidateIndex)
+            pending.push(candidateIndex)
+          })
+        }
+
+        const usages: CorridorUsage[] = []
+
+        for (const span of component) {
+          if (
+            !usages.some(
+              (usage) =>
+                usage.route === span.route &&
+                usage.segmentIndex === span.segmentIndex &&
+                usage.spanIndex === span.spanIndex
+            )
+          ) {
+            usages.push({
+              route: span.route,
+              segmentIndex: span.segmentIndex,
+              spanIndex: span.spanIndex,
+              forward: span.forward,
+            })
+          }
+        }
+
+        if (usages.length > 1) {
+          groups.set(`${lineKey}:${groupIndex++}`, usages)
+        }
+      }
+    }
+
+    return groups
+  }
+
+  private trackSpansOverlap(first: TrackSpan, second: TrackSpan): boolean {
+    if (first.route === second.route) {
+      return false
+    }
+
+    return (
+      Math.min(first.maximum, second.maximum) -
+        Math.max(first.minimum, second.minimum) >
+      0.001
+    )
+  }
+
+  private getTrackCoordinateKey(coordinate: number): number {
+    return Math.round(coordinate * 1000)
   }
 
   private applyLaneOffsets(
     groups: ReadonlyMap<string, CorridorUsage[]>,
-    offsetsByRoute: ReadonlyMap<Route, number[]>,
+    offsetsByRoute: ReadonlyMap<Route, number[][]>,
+    lanePrioritiesByRoute: ReadonlyMap<Route, number[][]>,
     routeOrder: ReadonlyMap<Route, number>,
-    reverseOffsetForOppositeDirection: boolean
+    reverseOffsetForOppositeDirection: boolean,
+    mutableRoutes: ReadonlySet<Route>
   ): void {
-    for (const usages of groups.values()) {
+    const orderedGroups = [...groups.values()].sort(
+      (first, second) => second.length - first.length
+    )
+
+    for (const usages of orderedGroups) {
       if (usages.length < 2) {
         continue
       }
@@ -499,28 +771,82 @@ export class RouteNetwork extends Container {
           (routeOrder.get(second.route) ?? 0)
       )
 
-      const centerIndex = (usages.length - 1) / 2
+      const usedLaneIndices = new Set<number>()
 
-      usages.forEach((usage, index) => {
+      for (const usage of usages) {
+        if (mutableRoutes.has(usage.route)) {
+          continue
+        }
+
+        const offsets = offsetsByRoute.get(usage.route)
+        const routeOffset =
+          offsets?.[usage.segmentIndex]?.[usage.spanIndex] ?? 0
         const canonicalOffset =
-          (index - centerIndex) * RouteNetwork.LANE_SPACING
+          reverseOffsetForOppositeDirection && !usage.forward
+            ? -routeOffset
+            : routeOffset
+
+        usedLaneIndices.add(
+          Math.round(canonicalOffset / RouteNetwork.LANE_SPACING)
+        )
+      }
+
+      for (const usage of usages) {
+        if (!mutableRoutes.has(usage.route)) {
+          continue
+        }
 
         /*
          * Polyline normals reverse when routes traverse a shared corridor
          * in opposite directions. Departures already share one direction.
          */
+        const laneIndex = this.findAvailableLaneIndex(usedLaneIndices)
+        const canonicalOffset = laneIndex * RouteNetwork.LANE_SPACING
         const routeOffset =
           reverseOffsetForOppositeDirection && !usage.forward
             ? -canonicalOffset
             : canonicalOffset
 
         const offsets = offsetsByRoute.get(usage.route)
+        const lanePriorities = lanePrioritiesByRoute.get(usage.route)
 
-        if (offsets) {
-          offsets[usage.segmentIndex] = routeOffset
+        if (
+          offsets &&
+          lanePriorities &&
+          usages.length >
+            (lanePriorities[usage.segmentIndex]?.[usage.spanIndex] ?? 0)
+        ) {
+          const segmentOffsets = offsets[usage.segmentIndex]
+          const segmentPriorities = lanePriorities[usage.segmentIndex]
+
+          if (!segmentOffsets || !segmentPriorities) {
+            continue
+          }
+
+          segmentOffsets[usage.spanIndex] = routeOffset
+          segmentPriorities[usage.spanIndex] = usages.length
+          usedLaneIndices.add(laneIndex)
         }
-      })
+      }
     }
+  }
+
+  private findAvailableLaneIndex(usedLaneIndices: ReadonlySet<number>): number {
+    if (!usedLaneIndices.has(0)) {
+      return 0
+    }
+
+    for (let distance = 1; distance <= this.routes.length; distance++) {
+      if (!usedLaneIndices.has(distance)) {
+        return distance
+      }
+
+      if (!usedLaneIndices.has(-distance)) {
+        return -distance
+      }
+    }
+
+    throw new Error('No route lane is available.')
   }
 
   private updateTerminalPorts(activeRoutes: readonly Route[]): void {
@@ -541,15 +867,9 @@ export class RouteNetwork extends Container {
         (route) => route.stationCount >= 2 && route.isInternalStation(station)
       )
 
-      const terminalRoutes = activeRoutes
-        .filter(
-          (route) => route.stationCount >= 2 && route.isTerminalAt(station)
-        )
-        .sort(
-          (first, second) =>
-            first.getTerminalLaneOffset(station) -
-            second.getTerminalLaneOffset(station)
-        )
+      const terminalRoutes = activeRoutes.filter(
+        (route) => route.stationCount >= 2 && route.isTerminalAt(station)
+      )
 
       if (terminalRoutes.length === 0) {
         continue
@@ -563,93 +883,74 @@ export class RouteNetwork extends Container {
         }
       }
 
-      const preferredPorts = terminalRoutes.map((route) =>
-        route.getPreferredTerminalPort(station)
-      )
+      for (const route of terminalRoutes) {
+        const incidentPort = route.getIncidentPorts(station)[0]
 
-      const firstPreferredPort = preferredPorts[0]
-
-      const allPreferSamePort =
-        firstPreferredPort !== undefined &&
-        preferredPorts.every((port) => port === firstPreferredPort)
-
-      const portOffsets = allPreferSamePort
-        ? this.getTerminalPortOffsets(terminalRoutes.length)
-        : new Array(terminalRoutes.length).fill(0)
-
-      terminalRoutes.forEach((route, index) => {
-        const preferredPort = preferredPorts[index]
-
-        const portOffset = portOffsets[index] ?? 0
-
-        if (preferredPort === undefined) {
-          return
+        if (incidentPort === undefined) {
+          throw new Error('Route terminal requires an incident port.')
         }
 
-        const desiredPort = preferredPort + portOffset
+        const terminalPortPriority = this.getTerminalPortPriority(incidentPort)
 
-        const laneOffset = route.getTerminalLaneOffset(station)
+        const availablePort =
+          terminalPortPriority.find((port) => !usedPorts.has(port)) ?? null
 
-        const bias =
-          Math.sign(laneOffset) ||
-          Math.sign(portOffset) ||
-          (index % 2 === 0 ? -1 : 1)
-
-        const availablePort = this.findAvailablePort(
-          desiredPort,
-          usedPorts,
-          bias
-        )
+        if (availablePort === null) {
+          throw new Error('No terminal port is available.')
+        }
 
         usedPorts.add(availablePort)
-
         route.setTerminalPort(station, availablePort)
-      })
+      }
     }
   }
 
-  private getTerminalPortOffsets(routeCount: number): readonly number[] {
-    switch (routeCount) {
-      case 1:
-        return [0]
+  private getTerminalPortPriority(incidentPort: number): readonly number[] {
+    /*
+     * Never fold a cap onto the incoming side. Among the five forward-facing
+     * ports, prefer the cardinal edge(s) closest to straight ahead, then the
+     * diagonals, then the remaining perpendicular cardinal edges.
+     *
+     * This makes a NW arrival prefer S/E, then SW/SE/NE, while a W arrival
+     * still prefers E, then NE/SE, then N/S.
+     */
+    const incomingPorts = new Set([
+      this.normalizePort(incidentPort - 1),
+      this.normalizePort(incidentPort),
+      this.normalizePort(incidentPort + 1),
+    ])
+    const oppositePort = this.normalizePort(incidentPort + 4)
+    const availablePorts = RouteNetwork.TERMINAL_PORT_TIE_BREAK_PRIORITY.filter(
+      (port) => !incomingPorts.has(port)
+    )
+    const nearestCardinalDistance = Math.min(
+      ...availablePorts
+        .filter((port) => port % 2 === 0)
+        .map((port) => this.getPortDistance(port, oppositePort))
+    )
 
-      case 2:
-        return [-1, 1]
+    return availablePorts.sort((firstPort, secondPort) => {
+      const getPriority = (port: number): number => {
+        if (port % 2 !== 0) {
+          return 2
+        }
 
-      case 3:
-        return [-1, 0, 1]
+        return this.getPortDistance(port, oppositePort) ===
+          nearestCardinalDistance
+          ? 1
+          : 3
+      }
 
-      default:
-        throw new Error('A station cannot have more than three routes.')
-    }
+      return getPriority(firstPort) - getPriority(secondPort)
+    })
   }
 
-  private findAvailablePort(
-    preferredPort: number,
-    usedPorts: ReadonlySet<number>,
-    bias: number
-  ): number {
-    const direction = bias < 0 ? -1 : 1
+  private getPortDistance(firstPort: number, secondPort: number): number {
+    const difference = Math.abs(
+      this.normalizePort(firstPort) - this.normalizePort(secondPort)
+    )
 
-    for (let distance = 0; distance < 8; distance++) {
-      const firstCandidate = this.normalizePort(
-        preferredPort + direction * distance
-      )
-
-      if (!usedPorts.has(firstCandidate)) {
-        return firstCandidate
-      }
-
-      const secondCandidate = this.normalizePort(
-        preferredPort - direction * distance
-      )
-
-      if (!usedPorts.has(secondCandidate)) {
-        return secondCandidate
-      }
-    }
-
-    throw new Error('No terminal port is available.')
+    return Math.min(difference, 8 - difference)
   }
 
   private normalizePort(port: number): number {
@@ -678,10 +979,8 @@ export class RouteNetwork extends Container {
     }
 
     const start = {
-      x: station.x +
-        (deltaX / length) * RouteNetwork.TERMINAL_EDGE_INSET,
-      y: station.y +
-        (deltaY / length) * RouteNetwork.TERMINAL_EDGE_INSET,
+      x: station.x + (deltaX / length) * RouteNetwork.TERMINAL_EDGE_INSET,
+      y: station.y + (deltaY / length) * RouteNetwork.TERMINAL_EDGE_INSET,
     }
 
     const terminalVectorX = terminal.x - start.x

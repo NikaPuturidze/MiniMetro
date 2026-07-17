@@ -24,6 +24,16 @@ export class Game {
     this.world.createStation(550, 280, StationType.Rectangle)
 
     this.world.createStation(750, 300, StationType.Rectangle)
+
+    this.world.createStation(950, 400, StationType.Triangle)
+
+    this.world.createStation(100, 750, StationType.Circle)
+
+    this.world.createStation(500, 450, StationType.Circle)
+
+    this.world.createStation(750, 100, StationType.Triangle)
+
+    this.world.createStation(950, 100, StationType.Triangle)
   }
 
   public start(): void {

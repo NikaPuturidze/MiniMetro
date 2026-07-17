@@ -31,7 +31,6 @@ export class RouteBuilder {
 
   private lastRetractedStation: Station | null = null
 
-  /* Prevent the just-joined station from being immediately retracted. */
   private lastJoinedStation: Station | null = null
 
   public constructor(
@@ -74,9 +73,6 @@ export class RouteBuilder {
 
     const pointerPosition = event.getLocalPosition(this.routeNetwork)
 
-    /*
-     * Clicking a terminal cap edits its existing route.
-     */
     const terminal = this.routeNetwork.findTerminalNear(
       pointerPosition,
       RouteBuilder.TERMINAL_HIT_RADIUS
@@ -92,10 +88,6 @@ export class RouteBuilder {
       return
     }
 
-    /*
-     * Clicking the station itself always starts a new
-     * route, even when an existing route ends there.
-     */
     const station = this.findStation(event.target)
 
     if (!station) {
@@ -227,7 +219,6 @@ export class RouteBuilder {
       return
     }
 
-    /* The station was already attached during pointer movement. */
     if (targetStation === this.lastJoinedStation) {
       dragState.route?.showAllTerminals()
       dragState.route?.redraw()
@@ -247,21 +238,12 @@ export class RouteBuilder {
       return
     }
 
-    /*
-     * A station click without an existing route is not a connection.
-     * For a route terminal, however, dropping its handle back onto the
-     * terminal station removes that station from the route.
-     */
     if (!dragState.route && targetStation === dragState.startStation) {
       this.cancelDrag()
       return
     }
 
     if (dragState.route) {
-      /*
-       * Restore terminal visibility before RouteNetwork
-       * recalculates the modified route.
-       */
       dragState.route.showAllTerminals()
 
       const result = this.routeNetwork.editRouteTerminal(
@@ -309,10 +291,6 @@ export class RouteBuilder {
     const route = this.dragState?.route
 
     if (route?.stationCount === 1) {
-      /*
-       * A single-station route is only a pending extension.  Releasing it
-       * without joining another station removes the final endpoint.
-       */
       this.routeNetwork.clearRoute(route)
     } else if (route) {
       route.showAllTerminals()
@@ -524,10 +502,6 @@ export class RouteBuilder {
     )
   }
 
-  /*
-   * Each station entered while the button remains held becomes the next
-   * terminal. This lets a single drag build a multi-station route.
-   */
   private joinHoveredStation(targetStation: Station): void {
     const dragState = this.dragState
 
@@ -575,11 +549,6 @@ export class RouteBuilder {
     }
   }
 
-  /*
-   * Retract a route as soon as its dragged end re-enters its own station.
-   * The new terminal stays attached to the pointer, allowing one continuous
-   * drag to remove several stations in sequence.
-   */
   private removeHoveredTerminal(dragState: DragState): void {
     const { route, startStation } = dragState
 

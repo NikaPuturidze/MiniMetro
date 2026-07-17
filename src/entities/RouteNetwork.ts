@@ -51,14 +51,9 @@ export type AddStationResult =
 export class RouteNetwork extends Container {
   public static readonly MAX_ROUTES_PER_STATION = 3
 
-  /* Each route retains its full, equal lane width alongside its neighbours. */
   private static readonly LANE_SPACING = Route.LINE_WIDTH
-  /* Starts outside a station's hit area, preserving station clicks. */
   private static readonly TERMINAL_EDGE_INSET = 24
-  /*
-   * Break equal-angle terminal choices with cardinal edges first. The values
-   * follow OctilinearPort's clockwise numbering: E, SE, S, SW, W, NW, N, NE.
-   */
+
   private static readonly TERMINAL_PORT_TIE_BREAK_PRIORITY = [
     6, 2, 4, 0, 5, 7, 3, 1,
   ]
@@ -111,11 +106,6 @@ export class RouteNetwork extends Container {
       }
     }
 
-    /*
-     * Mini Metro's endpoint-removal gesture drops a terminal handle back
-     * onto the station it currently belongs to.  Remove that endpoint so
-     * the route retracts to its previous station.
-     */
     if (targetStation === fromStation) {
       route.removeTerminalStation(fromStation)
       this.updateRoutes(route)
@@ -131,10 +121,6 @@ export class RouteNetwork extends Container {
     const adjacentStation =
       route.getFirstStation() === fromStation ? stations[1] : stations.at(-2)
 
-    /*
-     * Dragging a terminal onto its adjacent station
-     * removes the original terminal station.
-     */
     if (adjacentStation === targetStation) {
       route.removeTerminalStation(fromStation)
       this.updateRoutes(route)
@@ -145,11 +131,6 @@ export class RouteNetwork extends Container {
       }
     }
 
-    /*
-     * The target is already somewhere else inside the
-     * route. Removing or bypassing middle stations is
-     * deliberately prohibited.
-     */
     if (route.hasStation(targetStation)) {
       return {
         status: 'middle-station-removal-not-allowed',
@@ -372,10 +353,6 @@ export class RouteNetwork extends Container {
   }
 
   public updateRoutes(changedRoute?: Route): void {
-    /*
-     * Clearing every graphic first also removes visuals left behind by a
-     * route that just became available.
-     */
     for (const route of this.routes) {
       route.clear()
     }
@@ -421,11 +398,6 @@ export class RouteNetwork extends Container {
   ): void {
     const offsetsByRoute = new Map<Route, number[][]>()
 
-    /*
-     * A segment may be considered by groups at both of its ends. Keep the
-     * lane assignment from the busier junction so a two-route endpoint
-     * cannot collapse lanes that were separated at a three-route junction.
-     */
     const lanePrioritiesByRoute = new Map<Route, number[][]>()
 
     const trackSpans: TrackSpan[] = []
@@ -551,10 +523,6 @@ export class RouteNetwork extends Container {
           true
         )
 
-        /*
-         * An octilinear segment can bend immediately outside the station.
-         * Carry a shared lane across that unshared connector span first.
-         */
         if (
           incomingLane &&
           (incomingPriorities[incomingSpanIndex] ?? 0) === 0
@@ -566,12 +534,6 @@ export class RouteNetwork extends Container {
           outgoingOffsets[0] = outgoingLane.offset
         }
 
-        /*
-         * When a route joins a shared corridor at a station, carry its lane
-         * onto the adjacent unshared branch. This prevents that branch from
-         * lining up with another colour through the station. Never overwrite
-         * a span that already belongs to its own shared corridor.
-         */
         if (!incomingLane && outgoingLane) {
           incomingOffsets[incomingSpanIndex] = outgoingLane.offset
           continue
@@ -826,10 +788,6 @@ export class RouteNetwork extends Container {
           continue
         }
 
-        /*
-         * Polyline normals reverse when routes traverse a shared corridor
-         * in opposite directions. Departures already share one direction.
-         */
         const laneIndex = this.findAvailableLaneIndex(usedLaneIndices)
         const canonicalOffset = laneIndex * RouteNetwork.LANE_SPACING
         const routeOffset =
@@ -936,14 +894,6 @@ export class RouteNetwork extends Container {
   }
 
   private getTerminalPortPriority(incidentPort: number): readonly number[] {
-    /*
-     * Never fold a cap onto the incoming side. Among the five forward-facing
-     * ports, prefer the cardinal edge(s) closest to straight ahead, then the
-     * diagonals, then the remaining perpendicular cardinal edges.
-     *
-     * This makes a NW arrival prefer S/E, then SW/SE/NE, while a W arrival
-     * still prefers E, then NE/SE, then N/S.
-     */
     const incomingPorts = new Set([
       this.normalizePort(incidentPort - 1),
       this.normalizePort(incidentPort),
@@ -987,14 +937,6 @@ export class RouteNetwork extends Container {
     return ((port % 8) + 8) % 8
   }
 
-  /*
-   * A route terminal is drawn as a short segment outside the station,
-   * finished by a perpendicular cap.  Let players grab that whole exposed
-   * edge rather than requiring the pointer to land on the narrow cap.
-   *
-   * The inset begins beyond the station outline, so a click on a station
-   * still begins a new route as intended.
-   */
   private getTerminalEdgeDistance(
     point: { x: number; y: number },
     station: Station,

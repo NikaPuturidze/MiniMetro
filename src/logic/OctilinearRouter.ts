@@ -151,11 +151,6 @@ export class OctilinearRouter {
     let selectedCandidate = firstCandidate
     let smallestScore = Number.POSITIVE_INFINITY
 
-    /*
-     * Do not use the following station as a look-ahead here. It can flip
-     * an already drawn segment from diagonal-first to straight-first when
-     * a route is extended, despite both shapes being valid.
-     */
     for (const candidate of candidates) {
       let score = 0
 

@@ -7,7 +7,6 @@ export class Game {
 
   private isRunning = false
 
-  // Entry Point of Game
   public constructor(private readonly app: Application) {
     this.app.stage.eventMode = 'static'
     this.app.stage.hitArea = this.app.screen

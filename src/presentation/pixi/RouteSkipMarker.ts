@@ -1,9 +1,10 @@
-import type { Graphics } from 'pixi.js'
+import { Container, Graphics, type DestroyOptions } from 'pixi.js'
 import { StationType } from '@/constants/StationType'
 import type { Point } from '@/engine/geometry/Point'
 import type { StationId } from '@/game/domain/Ids'
 import type { Station } from '@/game/domain/Station'
 import { RouteLayoutCalculator } from '@/game/layout/RouteLayoutCalculator'
+import { drawRoundedRoutePath } from './RoundedRoutePath'
 import {
   getStationOuterRadius,
   STATION_BORDER_WIDTH,
@@ -11,7 +12,6 @@ import {
   STATION_SIZE,
   STATION_TRIANGLE_SCALE,
 } from './StationShapeGeometry'
-import { drawRoundedRoutePath } from './RoundedRoutePath'
 
 export interface RouteSkipPath {
   readonly points: readonly Point[]
@@ -20,41 +20,221 @@ export interface RouteSkipPath {
   readonly servedStationIds: ReadonlySet<StationId>
 }
 
+interface MarkerEntry {
+  readonly cut: Graphics
+  readonly mask: Graphics
+}
+
 const SKIP_CUT_WIDTH = 3
 const SKIP_CUT_EXTENSION = STATION_SIZE
+const SKIP_MASK_WIDTH =
+  RouteLayoutCalculator.LINE_WIDTH + SKIP_CUT_WIDTH * 2
 
-export function drawRouteSkipMarkers(
-  graphics: Graphics,
-  paths: readonly RouteSkipPath[],
-  stations: readonly Station[]
-): void {
-  let hasMarker = false
+export class RouteSkipMarkerView extends Container {
+  private readonly entries: MarkerEntry[] = []
 
-  for (const path of paths) {
-    for (const station of stations) {
-      if (
-        path.servedStationIds.has(station.id) ||
-        !doesPathCrossStation(path.points, station)
-      ) {
+  public constructor() {
+    super()
+    this.eventMode = 'none'
+  }
+
+  public draw(
+    paths: readonly RouteSkipPath[],
+    stations: readonly Station[]
+  ): void {
+    let entryIndex = 0
+
+    for (const path of paths) {
+      const skippedStations = stations.filter(
+        (station) =>
+          !path.servedStationIds.has(station.id) &&
+          doesPathCrossStation(path.points, station)
+      )
+
+      if (skippedStations.length === 0) {
         continue
       }
 
-      const markerRadius =
-        getStationOuterRadius(station.stationType) + SKIP_CUT_EXTENSION
+      const entry = this.getEntry(entryIndex)
 
-      hasMarker =
-        drawPathInsideRadius(graphics, path, station, markerRadius) ||
-        hasMarker
+      entryIndex++
+      entry.cut.clear()
+      entry.mask.clear()
+      entry.cut.visible = true
+      entry.mask.visible = true
+
+      drawRoundedRoutePath(
+        entry.cut,
+        path.points,
+        path.centerPoints ?? path.points,
+        path.spanLaneOffsets ?? []
+      )
+      entry.cut.stroke({
+        color: STATION_FILL_COLOR,
+        width: SKIP_CUT_WIDTH,
+        cap: 'round',
+        join: 'round',
+      })
+
+      for (const station of skippedStations) {
+        const markerRadius =
+          getStationOuterRadius(station.stationType) + SKIP_CUT_EXTENSION
+
+        drawMarkerMask(entry.mask, path.points, station, markerRadius)
+      }
+
+      entry.mask.stroke({
+        color: 0xffffff,
+        width: SKIP_MASK_WIDTH,
+        cap: 'butt',
+        join: 'round',
+      })
+      entry.cut.mask = entry.mask
+    }
+
+    for (let index = entryIndex; index < this.entries.length; index++) {
+      const entry = this.entries[index]
+
+      if (entry) {
+        entry.cut.clear()
+        entry.mask.clear()
+        entry.cut.visible = false
+        entry.mask.visible = false
+      }
     }
   }
 
-  if (hasMarker) {
-    graphics.stroke({
-      color: STATION_FILL_COLOR,
-      width: SKIP_CUT_WIDTH,
-      cap: 'round',
-      join: 'round',
-    })
+  public override destroy(options?: DestroyOptions): void {
+    for (const entry of this.entries) {
+      entry.cut.mask = null
+    }
+
+    this.entries.length = 0
+    super.destroy(options)
+  }
+
+  private getEntry(index: number): MarkerEntry {
+    const existing = this.entries[index]
+
+    if (existing) {
+      return existing
+    }
+
+    const cut = new Graphics()
+    const mask = new Graphics()
+    const entry = { cut, mask }
+
+    cut.eventMode = 'none'
+    mask.eventMode = 'none'
+    this.entries.push(entry)
+    this.addChild(cut, mask)
+
+    return entry
+  }
+}
+
+function drawMarkerMask(
+  graphics: Graphics,
+  points: readonly Point[],
+  center: Point,
+  radius: number
+): void {
+  let clippedPoints: Point[] = []
+  let canContinue = false
+
+  const flush = (): void => {
+    if (clippedPoints.length >= 2) {
+      drawRoundedRoutePath(graphics, clippedPoints)
+    }
+
+    clippedPoints = []
+  }
+
+  for (let index = 0; index < points.length - 1; index++) {
+    const start = points[index]
+    const end = points[index + 1]
+
+    if (!start || !end) {
+      flush()
+      canContinue = false
+      continue
+    }
+
+    const clipped = clipSpanToCircle(start, end, center, radius)
+
+    if (!clipped) {
+      flush()
+      canContinue = false
+      continue
+    }
+
+    const clippedStart = interpolatePoint(
+      start,
+      end,
+      clipped.startProgress
+    )
+    const clippedEnd = interpolatePoint(start, end, clipped.endProgress)
+    const continuesPrevious =
+      clippedPoints.length > 0 &&
+      canContinue &&
+      clipped.startProgress <= 0.001
+
+    if (continuesPrevious) {
+      clippedPoints.push(clippedEnd)
+    } else {
+      flush()
+      clippedPoints = [clippedStart, clippedEnd]
+    }
+
+    canContinue = clipped.endProgress >= 0.999
+  }
+
+  flush()
+}
+
+function clipSpanToCircle(
+  start: Point,
+  end: Point,
+  center: Point,
+  radius: number
+): {
+  readonly startProgress: number
+  readonly endProgress: number
+} | null {
+  const deltaX = end.x - start.x
+  const deltaY = end.y - start.y
+  const relativeX = start.x - center.x
+  const relativeY = start.y - center.y
+  const a = deltaX * deltaX + deltaY * deltaY
+
+  if (a === 0) {
+    return null
+  }
+
+  const b = 2 * (relativeX * deltaX + relativeY * deltaY)
+  const c =
+    relativeX * relativeX + relativeY * relativeY - radius * radius
+  const discriminant = b * b - 4 * a * c
+
+  if (discriminant < 0) {
+    return null
+  }
+
+  const root = Math.sqrt(discriminant)
+  const firstProgress = (-b - root) / (2 * a)
+  const secondProgress = (-b + root) / (2 * a)
+  const startProgress = Math.max(0, Math.min(firstProgress, secondProgress))
+  const endProgress = Math.min(1, Math.max(firstProgress, secondProgress))
+
+  return endProgress - startProgress <= 0.001
+    ? null
+    : { startProgress, endProgress }
+}
+
+function interpolatePoint(start: Point, end: Point, progress: number): Point {
+  return {
+    x: start.x + (end.x - start.x) * progress,
+    y: start.y + (end.y - start.y) * progress,
   }
 }
 
@@ -310,145 +490,5 @@ function getClosestPointOnSpan(
   return {
     distance: Math.hypot(point.x - closestX, point.y - closestY),
     progress,
-  }
-}
-
-function drawPathInsideRadius(
-  graphics: Graphics,
-  path: RouteSkipPath,
-  center: Point,
-  radius: number
-): boolean {
-  const centerPoints = path.centerPoints ?? path.points
-  let clippedPoints: Point[] = []
-  let clippedCenterPoints: Point[] = []
-  let clippedOffsets: number[] = []
-  let canContinue = false
-  let drewPath = false
-
-  const flush = (): void => {
-    if (clippedPoints.length >= 2) {
-      drawRoundedRoutePath(
-        graphics,
-        clippedPoints,
-        clippedCenterPoints,
-        clippedOffsets
-      )
-      drewPath = true
-    }
-
-    clippedPoints = []
-    clippedCenterPoints = []
-    clippedOffsets = []
-  }
-
-  for (let index = 0; index < path.points.length - 1; index++) {
-    const start = path.points[index]
-    const end = path.points[index + 1]
-    const centerStart = centerPoints[index]
-    const centerEnd = centerPoints[index + 1]
-
-    if (!start || !end || !centerStart || !centerEnd) {
-      flush()
-      canContinue = false
-      continue
-    }
-
-    const clipped = clipSpanToCircle(start, end, center, radius)
-
-    if (!clipped) {
-      flush()
-      canContinue = false
-      continue
-    }
-
-    const clippedStart = interpolatePoint(
-      start,
-      end,
-      clipped.startProgress
-    )
-    const clippedEnd = interpolatePoint(start, end, clipped.endProgress)
-    const clippedCenterStart = interpolatePoint(
-      centerStart,
-      centerEnd,
-      clipped.startProgress
-    )
-    const clippedCenterEnd = interpolatePoint(
-      centerStart,
-      centerEnd,
-      clipped.endProgress
-    )
-    const continuesPrevious =
-      clippedPoints.length > 0 &&
-      canContinue &&
-      clipped.startProgress <= 0.001
-
-    if (continuesPrevious) {
-      clippedPoints.push(clippedEnd)
-      clippedCenterPoints.push(clippedCenterEnd)
-      clippedOffsets.push(path.spanLaneOffsets?.[index] ?? 0)
-    } else {
-      flush()
-      clippedPoints = [clippedStart, clippedEnd]
-      clippedCenterPoints = [clippedCenterStart, clippedCenterEnd]
-      clippedOffsets = [path.spanLaneOffsets?.[index] ?? 0]
-    }
-
-    canContinue = clipped.endProgress >= 0.999
-  }
-
-  flush()
-
-  return drewPath
-}
-
-function clipSpanToCircle(
-  start: Point,
-  end: Point,
-  center: Point,
-  radius: number
-): {
-  readonly startProgress: number
-  readonly endProgress: number
-} | null {
-  const deltaX = end.x - start.x
-  const deltaY = end.y - start.y
-  const relativeX = start.x - center.x
-  const relativeY = start.y - center.y
-  const a = deltaX * deltaX + deltaY * deltaY
-
-  if (a === 0) {
-    return null
-  }
-
-  const b = 2 * (relativeX * deltaX + relativeY * deltaY)
-  const c =
-    relativeX * relativeX + relativeY * relativeY - radius * radius
-  const discriminant = b * b - 4 * a * c
-
-  if (discriminant < 0) {
-    return null
-  }
-
-  const root = Math.sqrt(discriminant)
-  const firstProgress = (-b - root) / (2 * a)
-  const secondProgress = (-b + root) / (2 * a)
-  const startProgress = Math.max(0, Math.min(firstProgress, secondProgress))
-  const endProgress = Math.min(1, Math.max(firstProgress, secondProgress))
-
-  if (endProgress - startProgress <= 0.001) {
-    return null
-  }
-
-  return {
-    startProgress,
-    endProgress,
-  }
-}
-
-function interpolatePoint(start: Point, end: Point, progress: number): Point {
-  return {
-    x: start.x + (end.x - start.x) * progress,
-    y: start.y + (end.y - start.y) * progress,
   }
 }

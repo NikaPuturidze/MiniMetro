@@ -5,7 +5,7 @@ import type { Route } from '@/game/domain/Route'
 import type { Station } from '@/game/domain/Station'
 import type { RouteLayout, TerminalLayout } from '@/game/layout/RouteLayout'
 import { drawRoundedRoutePath } from '../RoundedRoutePath'
-import { drawRouteSkipMarkers } from '../RouteSkipMarker'
+import { RouteSkipMarkerView } from '../RouteSkipMarker'
 import { STATION_BORDER_WIDTH, STATION_SIZE } from '../StationShapeGeometry'
 
 type TerminalKey = 'start' | 'end'
@@ -24,6 +24,7 @@ export class RouteView extends Graphics {
   private layout: RouteLayout | null = null
   private route: Route | null = null
   private stations: readonly Station[] = []
+  private readonly skipMarkers = new RouteSkipMarkerView()
   private readonly hiddenTerminalStationIds = new Set<StationId>()
   private hiddenSegmentIndex: number | null = null
   private readonly terminalTransitions = new Map<
@@ -40,6 +41,7 @@ export class RouteView extends Graphics {
     super()
     this.eventMode = 'static'
     this.cursor = 'pointer'
+    this.addChild(this.skipMarkers)
   }
 
   public render(
@@ -133,6 +135,7 @@ export class RouteView extends Graphics {
 
   private redraw(): void {
     this.clear()
+    this.skipMarkers.draw([], [])
 
     if (!this.layout && this.terminalTransitions.size === 0) {
       return
@@ -161,8 +164,7 @@ export class RouteView extends Graphics {
       join: 'round',
     })
 
-    drawRouteSkipMarkers(
-      this,
+    this.skipMarkers.draw(
       visibleSegments.map((segment) => ({
         points: segment.points,
         centerPoints: segment.centerPoints,

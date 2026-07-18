@@ -67,7 +67,7 @@ export class GameCompositionRoot {
       new RouteLayoutCalculator(),
       routeViews
     )
-    const preview = new RoutePreviewController(state, previewView)
+    const preview = new RoutePreviewController(state, previewView, routeViews)
     const hitTester = new PixiRouteHitTester(routeViews)
     const interaction = new RouteInteractionController(
       state,

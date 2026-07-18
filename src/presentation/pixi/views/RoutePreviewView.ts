@@ -2,30 +2,40 @@ import { Graphics } from 'pixi.js'
 import type { Point } from '@/engine/geometry/Point'
 import type { StationId } from '@/game/domain/Ids'
 import type { Station } from '@/game/domain/Station'
+import { PolylineOffset } from '@/game/layout/PolylineOffset'
 import { RouteLayoutCalculator } from '@/game/layout/RouteLayoutCalculator'
 import { drawRoundedRoutePath } from '../RoundedRoutePath'
-import { drawRouteSkipMarkers } from '../RouteSkipMarker'
+import { RouteSkipMarkerView } from '../RouteSkipMarker'
 
 export class RoutePreviewView extends Graphics {
   private static readonly PREVIEW_ALPHA = 0.65
   private static readonly PREVIEW_CAP_LENGTH = 20
+  private readonly skipMarkers = new RouteSkipMarkerView()
+
+  public constructor() {
+    super()
+    this.addChild(this.skipMarkers)
+  }
 
   public show(
-    points: readonly Point[],
+    centerPoints: readonly Point[],
     color: number,
     showTerminalCap: boolean,
     stations: readonly Station[],
-    servedStationIds: ReadonlySet<StationId>
+    servedStationIds: ReadonlySet<StationId>,
+    spanLaneOffsets: readonly number[] = []
   ): void {
+    const points = PolylineOffset.calculate(centerPoints, spanLaneOffsets)
     const first = points[0]
 
     this.clear()
+    this.skipMarkers.draw([], [])
 
     if (!first) {
       return
     }
 
-    drawRoundedRoutePath(this, points)
+    drawRoundedRoutePath(this, points, centerPoints, spanLaneOffsets)
 
     if (showTerminalCap) {
       const beforeLast = points.at(-2)
@@ -44,15 +54,15 @@ export class RoutePreviewView extends Graphics {
       join: 'round',
     })
 
-    drawRouteSkipMarkers(
-      this,
-      [{ points, servedStationIds }],
+    this.skipMarkers.draw(
+      [{ points, centerPoints, spanLaneOffsets, servedStationIds }],
       stations
     )
   }
 
   public hide(): void {
     this.clear()
+    this.skipMarkers.draw([], [])
   }
 
   private drawTerminalCap(terminal: Point, direction: Point): void {

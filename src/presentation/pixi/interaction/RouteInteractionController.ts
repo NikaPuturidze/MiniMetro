@@ -178,7 +178,8 @@ export class RouteInteractionController {
     this.preview.showExtension(
       this.state.startStationId,
       input.point,
-      this.getPreviewColor()
+      this.getPreviewColor(),
+      this.state.routeId
     )
   }
 

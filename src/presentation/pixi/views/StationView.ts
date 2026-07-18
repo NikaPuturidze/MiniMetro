@@ -5,10 +5,10 @@ import type { Station } from '@/game/domain/Station'
 import {
   drawStationShapePath,
   STATION_BORDER_WIDTH,
+  STATION_FILL_COLOR,
 } from '../StationShapeGeometry'
 
 export class StationView extends Container {
-  private static readonly FILL_COLOR = 0xeeeeee
   private static readonly BORDER_COLOR = 0x222222
 
   private readonly shape = new Graphics()
@@ -28,7 +28,7 @@ export class StationView extends Container {
 
   private draw(stationType: StationType): void {
     drawStationShapePath(this.shape, stationType)
-      .fill(StationView.FILL_COLOR)
+      .fill(STATION_FILL_COLOR)
       .stroke({
         color: StationView.BORDER_COLOR,
         width: STATION_BORDER_WIDTH,

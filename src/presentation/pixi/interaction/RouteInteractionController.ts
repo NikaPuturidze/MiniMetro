@@ -799,18 +799,66 @@ export class RouteInteractionController {
             x: start.x,
             y: start.y + directionY * (absoluteY - absoluteX),
           }
-    const diagonalFirstDistance = Math.hypot(
-      pointer.x - diagonalFirstPoint.x,
-      pointer.y - diagonalFirstPoint.y
-    )
-    const straightFirstDistance = Math.hypot(
-      pointer.x - straightFirstPoint.x,
-      pointer.y - straightFirstPoint.y
-    )
+    const diagonalFirstDistance = this.getDistanceToPath(pointer, [
+      start,
+      diagonalFirstPoint,
+      end,
+    ])
+    const straightFirstDistance = this.getDistanceToPath(pointer, [
+      start,
+      straightFirstPoint,
+      end,
+    ])
 
     return diagonalFirstDistance <= straightFirstDistance
       ? 'diagonal-first'
       : 'straight-first'
+  }
+
+  private getDistanceToPath(
+    point: Point,
+    path: readonly Point[]
+  ): number {
+    let minimumDistance = Number.POSITIVE_INFINITY
+
+    for (let index = 0; index < path.length - 1; index++) {
+      const start = path[index]
+      const end = path[index + 1]
+
+      if (!start || !end) {
+        continue
+      }
+
+      minimumDistance = Math.min(
+        minimumDistance,
+        this.getDistanceToSpan(point, start, end)
+      )
+    }
+
+    return minimumDistance
+  }
+
+  private getDistanceToSpan(point: Point, start: Point, end: Point): number {
+    const deltaX = end.x - start.x
+    const deltaY = end.y - start.y
+    const lengthSquared = deltaX * deltaX + deltaY * deltaY
+
+    if (lengthSquared === 0) {
+      return Math.hypot(point.x - start.x, point.y - start.y)
+    }
+
+    const projection = Math.max(
+      0,
+      Math.min(
+        1,
+        ((point.x - start.x) * deltaX + (point.y - start.y) * deltaY) /
+          lengthSquared
+      )
+    )
+    const closestX = start.x + projection * deltaX
+    const closestY = start.y + projection * deltaY
+
+    return Math.hypot(point.x - closestX, point.y - closestY)
   }
 
   private clear(immediateEffects = false): void {

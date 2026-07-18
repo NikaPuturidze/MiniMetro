@@ -26,7 +26,11 @@ export class OctilinearRouteGeometryPolicy implements RouteGeometryPolicy {
     const preferences = this.resolveFixedPreferences(candidate, state)
 
     if (this.isWithinParallelRouteLimit(candidate, preferences, state)) {
-      return []
+      return this.createRoutingChoices(
+        candidate,
+        preferences,
+        candidate.flexibleSegmentIndices
+      )
     }
 
     for (const assignment of this.createFlexibleAssignments(
@@ -44,26 +48,38 @@ export class OctilinearRouteGeometryPolicy implements RouteGeometryPolicy {
         continue
       }
 
-      return candidate.flexibleSegmentIndices.flatMap(
-        (segmentIndex, index): readonly RouteRoutingChoice[] => {
-          const startStationId = candidate.stationIds[segmentIndex]
-          const endStationId =
-            segmentIndex === candidate.stationIds.length - 1 &&
-            candidate.isCircular
-              ? candidate.stationIds[0]
-              : candidate.stationIds[segmentIndex + 1]
-          const preference = assignment[index]
-
-          return startStationId === undefined ||
-            endStationId === undefined ||
-            preference === undefined
-            ? []
-            : [{ startStationId, endStationId, preference }]
-        }
+      return this.createRoutingChoices(
+        candidate,
+        assignedPreferences,
+        candidate.flexibleSegmentIndices
       )
     }
 
     return null
+  }
+
+  private createRoutingChoices(
+    candidate: RouteGeometryCandidate,
+    preferences: readonly (SegmentRoutingPreference | undefined)[],
+    segmentIndices: readonly number[]
+  ): readonly RouteRoutingChoice[] {
+    return segmentIndices.flatMap(
+      (segmentIndex): readonly RouteRoutingChoice[] => {
+        const startStationId = candidate.stationIds[segmentIndex]
+        const endStationId =
+          segmentIndex === candidate.stationIds.length - 1 &&
+          candidate.isCircular
+            ? candidate.stationIds[0]
+            : candidate.stationIds[segmentIndex + 1]
+        const preference = preferences[segmentIndex]
+
+        return startStationId === undefined ||
+          endStationId === undefined ||
+          preference === undefined
+          ? []
+          : [{ startStationId, endStationId, preference }]
+      }
+    )
   }
 
   private resolveFixedPreferences(
@@ -166,10 +182,11 @@ export class OctilinearRouteGeometryPolicy implements RouteGeometryPolicy {
         (route) => route.id !== candidate.routeId && route.stationCount >= 2
       )
       .flatMap((route) => this.createRouteSpans(route, state))
+    const allSpans = [...candidateSpans, ...otherSpans]
 
     return candidateSpans.every(
       (candidateSpan) =>
-        this.getMaximumOverlappingRouteCount(candidateSpan, otherSpans) <
+        this.getMaximumOverlappingLaneCount(candidateSpan, allSpans) <
         OctilinearRouteGeometryPolicy.MAX_PARALLEL_ROUTES
     )
   }
@@ -290,20 +307,20 @@ export class OctilinearRouteGeometryPolicy implements RouteGeometryPolicy {
     }
   }
 
-  private getMaximumOverlappingRouteCount(
+  private getMaximumOverlappingLaneCount(
     candidate: TrackSpan,
-    otherSpans: readonly TrackSpan[]
+    allSpans: readonly TrackSpan[]
   ): number {
-    const overlaps = otherSpans
+    const overlaps = allSpans
       .filter(
         (span) =>
+          span !== candidate &&
           span.lineKey === candidate.lineKey &&
           Math.min(span.maximum, candidate.maximum) -
             Math.max(span.minimum, candidate.minimum) >
             0.001
       )
       .map((span) => ({
-        routeId: span.routeId,
         minimum: Math.max(span.minimum, candidate.minimum),
         maximum: Math.min(span.maximum, candidate.maximum),
       }))
@@ -328,16 +345,12 @@ export class OctilinearRouteGeometryPolicy implements RouteGeometryPolicy {
       }
 
       const midpoint = (start + end) / 2
-      const routeIds = new Set(
-        overlaps
-          .filter(
-            (overlap) =>
-              overlap.minimum < midpoint && overlap.maximum > midpoint
-          )
-          .map((overlap) => overlap.routeId)
+      const laneCount = overlaps.filter(
+        (overlap) =>
+          overlap.minimum < midpoint && overlap.maximum > midpoint
       )
 
-      maximum = Math.max(maximum, routeIds.size)
+      maximum = Math.max(maximum, laneCount.length)
     }
 
     return maximum

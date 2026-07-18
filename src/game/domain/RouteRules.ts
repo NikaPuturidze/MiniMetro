@@ -117,13 +117,21 @@ export class RouteRules {
         : [...route.getStationIds(), stationId]
     const flexibleSegmentIndex =
       terminal === 'start' ? 0 : stationIds.length - 2
-
-    return this.applyGeometryPolicy(
-      this.createGeometryCandidate(route, stationIds, false, [
-        flexibleSegmentIndex,
-      ]),
-      state
+    const candidate = this.createGeometryCandidate(
+      route,
+      stationIds,
+      false,
+      [flexibleSegmentIndex]
     )
+    const preferences = [...candidate.preferences]
+
+    // The live preview is routed from the existing terminal toward the target.
+    // A prepended segment is stored in the reverse direction, so its routing
+    // preference must be inverted to preserve the same physical octilinear path.
+    preferences[flexibleSegmentIndex] =
+      terminal === 'start' ? 'straight-first' : 'diagonal-first'
+
+    return this.applyGeometryPolicy({ ...candidate, preferences }, state)
   }
 
   public canCloseRoute(
@@ -149,12 +157,19 @@ export class RouteRules {
       return { success: false, reason: 'route-too-short-to-close' }
     }
 
-    return this.applyGeometryPolicy(
-      this.createGeometryCandidate(route, route.getStationIds(), true, [
-        route.stationCount - 1,
-      ]),
-      state
+    const closureSegmentIndex = route.stationCount - 1
+    const candidate = this.createGeometryCandidate(
+      route,
+      route.getStationIds(),
+      true,
+      [closureSegmentIndex]
     )
+    const preferences = [...candidate.preferences]
+
+    preferences[closureSegmentIndex] =
+      terminal === 'start' ? 'straight-first' : 'diagonal-first'
+
+    return this.applyGeometryPolicy({ ...candidate, preferences }, state)
   }
 
   public canReopenRoute(routeId: RouteId, state: GameStateReader): RuleResult {

@@ -22,7 +22,13 @@ export class RoutePreviewController {
       return
     }
 
-    this.view.show(OctilinearRouter.route([station, pointer]), color, true)
+    this.view.show(
+      OctilinearRouter.route([station, pointer]),
+      color,
+      true,
+      this.state.getStations(),
+      new Set([stationId])
+    )
   }
 
   public showInsertion(
@@ -46,11 +52,27 @@ export class RoutePreviewController {
     this.view.show(
       OctilinearRouter.route([start, insertionPoint, end]),
       route.color,
-      false
+      false,
+      this.state.getStations(),
+      new Set([
+        start.id,
+        end.id,
+        ...this.getStationIdsAtPoint(insertionPoint),
+      ])
     )
   }
 
   public hide(): void {
     this.view.hide()
+  }
+
+  private getStationIdsAtPoint(point: Point): readonly StationId[] {
+    return this.state
+      .getStations()
+      .filter(
+        (station) =>
+          Math.hypot(station.x - point.x, station.y - point.y) < 0.001
+      )
+      .map((station) => station.id)
   }
 }

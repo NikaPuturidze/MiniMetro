@@ -1,7 +1,10 @@
 import { Graphics } from 'pixi.js'
 import type { Point } from '@/engine/geometry/Point'
+import type { StationId } from '@/game/domain/Ids'
+import type { Station } from '@/game/domain/Station'
 import { RouteLayoutCalculator } from '@/game/layout/RouteLayoutCalculator'
 import { drawRoundedRoutePath } from '../RoundedRoutePath'
+import { drawRouteSkipMarkers } from '../RouteSkipMarker'
 
 export class RoutePreviewView extends Graphics {
   private static readonly PREVIEW_ALPHA = 0.65
@@ -10,7 +13,9 @@ export class RoutePreviewView extends Graphics {
   public show(
     points: readonly Point[],
     color: number,
-    showTerminalCap: boolean
+    showTerminalCap: boolean,
+    stations: readonly Station[],
+    servedStationIds: ReadonlySet<StationId>
   ): void {
     const first = points[0]
 
@@ -38,6 +43,12 @@ export class RoutePreviewView extends Graphics {
       cap: 'butt',
       join: 'round',
     })
+
+    drawRouteSkipMarkers(
+      this,
+      [{ points, servedStationIds }],
+      stations
+    )
   }
 
   public hide(): void {

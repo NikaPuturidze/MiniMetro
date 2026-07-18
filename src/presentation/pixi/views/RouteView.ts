@@ -1,8 +1,11 @@
 import { Graphics, type DestroyOptions, type Ticker } from 'pixi.js'
 import type { Point } from '@/engine/geometry/Point'
 import type { RouteId, StationId } from '@/game/domain/Ids'
+import type { Route } from '@/game/domain/Route'
+import type { Station } from '@/game/domain/Station'
 import type { RouteLayout, TerminalLayout } from '@/game/layout/RouteLayout'
 import { drawRoundedRoutePath } from '../RoundedRoutePath'
+import { drawRouteSkipMarkers } from '../RouteSkipMarker'
 import { STATION_BORDER_WIDTH, STATION_SIZE } from '../StationShapeGeometry'
 
 type TerminalKey = 'start' | 'end'
@@ -19,6 +22,8 @@ export class RouteView extends Graphics {
   private static readonly TERMINAL_COLLAPSE_DURATION_SECONDS = 0.14
   private static readonly TERMINAL_EXPAND_DURATION_SECONDS = 0.18
   private layout: RouteLayout | null = null
+  private route: Route | null = null
+  private stations: readonly Station[] = []
   private readonly hiddenTerminalStationIds = new Set<StationId>()
   private hiddenSegmentIndex: number | null = null
   private readonly terminalTransitions = new Map<
@@ -37,10 +42,16 @@ export class RouteView extends Graphics {
     this.cursor = 'pointer'
   }
 
-  public render(layout: RouteLayout | null): void {
+  public render(
+    layout: RouteLayout | null,
+    route: Route | null,
+    stations: readonly Station[]
+  ): void {
     const previousLayout = this.layout
 
     this.layout = layout
+    this.route = route
+    this.stations = stations
     this.updateTerminalTransition(
       'start',
       previousLayout?.startTerminal ?? null,
@@ -127,10 +138,17 @@ export class RouteView extends Graphics {
       return
     }
 
-    for (const segment of this.layout?.segments ?? []) {
-      if (segment.segmentIndex !== this.hiddenSegmentIndex) {
-        drawRoundedRoutePath(this, segment.points)
-      }
+    const visibleSegments = (this.layout?.segments ?? []).filter(
+      (segment) => segment.segmentIndex !== this.hiddenSegmentIndex
+    )
+
+    for (const segment of visibleSegments) {
+      drawRoundedRoutePath(
+        this,
+        segment.points,
+        segment.centerPoints,
+        segment.spanLaneOffsets
+      )
     }
 
     this.drawTerminalState('start', this.layout?.startTerminal ?? null)
@@ -142,6 +160,19 @@ export class RouteView extends Graphics {
       cap: 'butt',
       join: 'round',
     })
+
+    drawRouteSkipMarkers(
+      this,
+      visibleSegments.map((segment) => ({
+        points: segment.points,
+        centerPoints: segment.centerPoints,
+        spanLaneOffsets: segment.spanLaneOffsets,
+        servedStationIds: new Set(
+          this.route?.getSegmentStationIds(segment.segmentIndex) ?? []
+        ),
+      })),
+      this.stations
+    )
   }
 
   private updateTerminalTransition(

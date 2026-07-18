@@ -5,7 +5,9 @@ const CORNER_RADIUS = 10
 
 export function drawRoundedRoutePath(
   graphics: Graphics,
-  points: readonly Point[]
+  points: readonly Point[],
+  centerPoints: readonly Point[] = points,
+  spanLaneOffsets: readonly number[] = []
 ): void {
   const first = points[0]
 
@@ -19,23 +21,46 @@ export function drawRoundedRoutePath(
     const previous = points[index - 1]
     const current = points[index]
     const next = points[index + 1]
+    const centerPrevious = centerPoints[index - 1]
+    const centerCurrent = centerPoints[index]
+    const centerNext = centerPoints[index + 1]
 
-    if (!previous || !current || !next) {
+    if (
+      !previous ||
+      !current ||
+      !next ||
+      !centerPrevious ||
+      !centerCurrent ||
+      !centerNext
+    ) {
       continue
     }
 
     const incomingLength = Math.hypot(
-      current.x - previous.x,
-      current.y - previous.y
+      centerCurrent.x - centerPrevious.x,
+      centerCurrent.y - centerPrevious.y
     )
-    const outgoingLength = Math.hypot(next.x - current.x, next.y - current.y)
+    const outgoingLength = Math.hypot(
+      centerNext.x - centerCurrent.x,
+      centerNext.y - centerCurrent.y
+    )
     const radius = Math.min(
       CORNER_RADIUS,
       incomingLength / 2,
       outgoingLength / 2
     )
-    const entryPoint = moveTowards(current, previous, radius)
-    const exitPoint = moveTowards(current, next, radius)
+    const entryPoint = offsetPoint(
+      moveTowards(centerCurrent, centerPrevious, radius),
+      centerPrevious,
+      centerCurrent,
+      spanLaneOffsets[index - 1] ?? 0
+    )
+    const exitPoint = offsetPoint(
+      moveTowards(centerCurrent, centerNext, radius),
+      centerCurrent,
+      centerNext,
+      spanLaneOffsets[index] ?? 0
+    )
 
     graphics.lineTo(entryPoint.x, entryPoint.y)
     graphics.quadraticCurveTo(current.x, current.y, exitPoint.x, exitPoint.y)
@@ -45,6 +70,26 @@ export function drawRoundedRoutePath(
 
   if (last) {
     graphics.lineTo(last.x, last.y)
+  }
+}
+
+function offsetPoint(
+  point: Point,
+  spanStart: Point,
+  spanEnd: Point,
+  offset: number
+): Point {
+  const deltaX = spanEnd.x - spanStart.x
+  const deltaY = spanEnd.y - spanStart.y
+  const length = Math.hypot(deltaX, deltaY)
+
+  if (length === 0 || offset === 0) {
+    return point
+  }
+
+  return {
+    x: point.x - (deltaY / length) * offset,
+    y: point.y + (deltaX / length) * offset,
   }
 }
 

@@ -4,6 +4,7 @@ import { StationType } from '@/constants/StationType'
 export const STATION_SIZE = 16
 export const STATION_TRIANGLE_SCALE = 4 / 3
 export const STATION_BORDER_WIDTH = 5
+export const STATION_FILL_COLOR = 0xeeeeee
 
 export function drawStationShapePath(
   graphics: Graphics,

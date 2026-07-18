@@ -10,7 +10,7 @@ export class RouteViewRegistry {
 
   public constructor(
     private readonly world: WorldView,
-    state: GameStateReader,
+    private readonly state: GameStateReader,
     ticker: Ticker
   ) {
     for (const route of state.getRoutes()) {
@@ -30,8 +30,14 @@ export class RouteViewRegistry {
   }
 
   public renderAll(layouts: ReadonlyMap<RouteId, RouteLayout>): void {
+    const stations = this.state.getStations()
+
     for (const [routeId, view] of this.views) {
-      view.render(layouts.get(routeId) ?? null)
+      view.render(
+        layouts.get(routeId) ?? null,
+        this.state.getRoute(routeId) ?? null,
+        stations
+      )
     }
   }
 }

@@ -3,16 +3,19 @@ import { GameEventType, type GameDomainEvent } from '@/game/domain/GameEvent'
 import { GameState } from '@/game/domain/GameState'
 import type { RouteId, StationId } from '@/game/domain/Ids'
 import { type Route, type SegmentRoutingPreference } from '@/game/domain/Route'
+import type { RouteRoutingChoice } from '@/game/domain/RouteGeometryPolicy'
 import { RouteRules } from '@/game/domain/RouteRules'
 import { Station } from '@/game/domain/Station'
 import { OctilinearRouter } from '@/game/layout/OctilinearRouter'
 import type {
   CommandResult,
+  CloseRouteInput,
   CreateStationInput,
   ExtendRouteInput,
   GameCommands,
   InsertStationInput,
   RemoveRouteTerminalInput,
+  ReopenRouteInput,
   SetSegmentRoutingInput,
   StartRouteInput,
 } from './GameCommands'
@@ -63,6 +66,7 @@ export class RouteEditingService implements GameCommands {
 
     route.appendStation(input.startStationId)
     route.appendStation(input.endStationId)
+    this.applyRoutingChoices(route, rule.routingChoices)
 
     this.events.publish({
       type: GameEventType.RouteCreated,
@@ -96,12 +100,58 @@ export class RouteEditingService implements GameCommands {
     } else {
       route.appendStation(input.stationId)
     }
+    this.applyRoutingChoices(route, rule.routingChoices)
 
     this.events.publish({
       type: GameEventType.RouteConnectedToStation,
       routeId: route.id,
       stationId: input.stationId,
       terminal: input.terminal,
+    })
+    this.invalidateLayout(route.id)
+
+    return { success: true, value: undefined }
+  }
+
+  public closeRoute(input: CloseRouteInput): CommandResult<void> {
+    const rule = this.rules.canCloseRoute(
+      input.routeId,
+      input.terminal,
+      this.state
+    )
+
+    if (!rule.success) {
+      return rule
+    }
+
+    const route = this.state.requireRoute(input.routeId)
+
+    this.preserveImplicitRoutingPreferences(route)
+    route.close(input.terminal)
+    this.applyRoutingChoices(route, rule.routingChoices)
+    this.events.publish({
+      type: GameEventType.RouteClosed,
+      routeId: route.id,
+    })
+    this.invalidateLayout(route.id)
+
+    return { success: true, value: undefined }
+  }
+
+  public reopenRoute(input: ReopenRouteInput): CommandResult<void> {
+    const rule = this.rules.canReopenRoute(input.routeId, this.state)
+
+    if (!rule.success) {
+      return rule
+    }
+
+    const route = this.state.requireRoute(input.routeId)
+
+    this.preserveImplicitRoutingPreferences(route)
+    route.reopen()
+    this.events.publish({
+      type: GameEventType.RouteReopened,
+      routeId: route.id,
     })
     this.invalidateLayout(route.id)
 
@@ -124,6 +174,7 @@ export class RouteEditingService implements GameCommands {
 
     this.preserveImplicitRoutingPreferences(route)
     route.insertStation(input.segmentIndex + 1, input.stationId)
+    this.applyRoutingChoices(route, rule.routingChoices)
 
     this.events.publish({
       type: GameEventType.StationInsertedIntoRoute,
@@ -179,9 +230,10 @@ export class RouteEditingService implements GameCommands {
   }
 
   public setSegmentRouting(input: SetSegmentRoutingInput): CommandResult<void> {
-    const rule = this.rules.canSetSegmentRouting(
+    const rule = this.rules.canUseSegmentRouting(
       input.routeId,
       input.segmentIndex,
+      input.preference,
       this.state
     )
 
@@ -221,9 +273,13 @@ export class RouteEditingService implements GameCommands {
   }
 
   private preserveImplicitRoutingPreferences(route: Route): void {
-    const stations = route
+    const routeStations = route
       .getStationIds()
       .map((stationId) => this.state.requireStation(stationId))
+    const stations =
+      route.isCircular && routeStations[0]
+        ? [...routeStations, routeStations[0]]
+        : routeStations
     const routedSegments = OctilinearRouter.routeSegments(
       stations,
       stations
@@ -286,6 +342,19 @@ export class RouteEditingService implements GameCommands {
     ) < 0.001
       ? 'diagonal-first'
       : 'straight-first'
+  }
+
+  private applyRoutingChoices(
+    route: Route,
+    choices: readonly RouteRoutingChoice[]
+  ): void {
+    for (const choice of choices) {
+      route.setRoutingPreferenceBetween(
+        choice.startStationId,
+        choice.endStationId,
+        choice.preference
+      )
+    }
   }
 
   private invalidateLayout(routeId: RouteId): void {

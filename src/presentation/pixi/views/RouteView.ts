@@ -1,20 +1,36 @@
-import { Graphics } from 'pixi.js'
+import { Graphics, type DestroyOptions, type Ticker } from 'pixi.js'
 import type { Point } from '@/engine/geometry/Point'
 import type { RouteId, StationId } from '@/game/domain/Ids'
 import type { RouteLayout, TerminalLayout } from '@/game/layout/RouteLayout'
-import { RouteLayoutCalculator } from '@/game/layout/RouteLayoutCalculator'
+import { drawRoundedRoutePath } from '../RoundedRoutePath'
+import { STATION_BORDER_WIDTH, STATION_SIZE } from '../StationShapeGeometry'
+
+type TerminalKey = 'start' | 'end'
+
+interface TerminalTransition {
+  readonly previous: TerminalLayout | null
+  readonly next: TerminalLayout | null
+  elapsedSeconds: number
+}
 
 export class RouteView extends Graphics {
-  private static readonly TERMINAL_CAP_LENGTH = 30
-  private static readonly CORNER_RADIUS = 10
-
+  private static readonly TERMINAL_CAP_LENGTH = STATION_SIZE * 2
+  private static readonly ROUTE_STROKE_WIDTH = STATION_BORDER_WIDTH * 2
+  private static readonly TERMINAL_COLLAPSE_DURATION_SECONDS = 0.14
+  private static readonly TERMINAL_EXPAND_DURATION_SECONDS = 0.18
   private layout: RouteLayout | null = null
-  private hiddenTerminalStationId: StationId | null = null
+  private readonly hiddenTerminalStationIds = new Set<StationId>()
   private hiddenSegmentIndex: number | null = null
+  private readonly terminalTransitions = new Map<
+    TerminalKey,
+    TerminalTransition
+  >()
+  private isAnimationTicking = false
 
   public constructor(
     public readonly routeId: RouteId,
-    private readonly color: number
+    private readonly color: number,
+    private readonly ticker: Ticker
   ) {
     super()
     this.eventMode = 'static'
@@ -22,7 +38,20 @@ export class RouteView extends Graphics {
   }
 
   public render(layout: RouteLayout | null): void {
+    const previousLayout = this.layout
+
     this.layout = layout
+    this.updateTerminalTransition(
+      'start',
+      previousLayout?.startTerminal ?? null,
+      layout?.startTerminal ?? null
+    )
+    this.updateTerminalTransition(
+      'end',
+      previousLayout?.endTerminal ?? null,
+      layout?.endTerminal ?? null
+    )
+    this.updateAnimationTicker()
     this.redraw()
   }
 
@@ -31,13 +60,26 @@ export class RouteView extends Graphics {
       this.layout?.startTerminal?.stationId === stationId ||
       this.layout?.endTerminal?.stationId === stationId
     ) {
-      this.hiddenTerminalStationId = stationId
+      this.hiddenTerminalStationIds.add(stationId)
       this.redraw()
     }
   }
 
   public showAllTerminals(): void {
-    this.hiddenTerminalStationId = null
+    const hiddenStationIds = new Set(this.hiddenTerminalStationIds)
+
+    this.hiddenTerminalStationIds.clear()
+    this.restartRevealedTerminalTransition(
+      'start',
+      this.layout?.startTerminal ?? null,
+      hiddenStationIds
+    )
+    this.restartRevealedTerminalTransition(
+      'end',
+      this.layout?.endTerminal ?? null,
+      hiddenStationIds
+    )
+    this.updateAnimationTicker()
     this.redraw()
   }
 
@@ -64,7 +106,8 @@ export class RouteView extends Graphics {
 
     return terminals.filter(
       (terminal): terminal is TerminalLayout =>
-        terminal !== null && terminal.stationId !== this.hiddenTerminalStationId
+        terminal !== null &&
+        !this.hiddenTerminalStationIds.has(terminal.stationId)
     )
   }
 
@@ -72,104 +115,231 @@ export class RouteView extends Graphics {
     return this.layout
   }
 
+  public override destroy(options?: DestroyOptions): void {
+    this.stopAnimationTicker()
+    super.destroy(options)
+  }
+
   private redraw(): void {
     this.clear()
 
-    if (!this.layout) {
+    if (!this.layout && this.terminalTransitions.size === 0) {
       return
     }
 
-    for (const segment of this.layout.segments) {
+    for (const segment of this.layout?.segments ?? []) {
       if (segment.segmentIndex !== this.hiddenSegmentIndex) {
-        this.drawRoundedPath(segment.points)
+        drawRoundedRoutePath(this, segment.points)
       }
     }
 
-    for (const terminal of this.getVisibleTerminals()) {
-      this.moveTo(terminal.origin.x, terminal.origin.y)
-      this.lineTo(terminal.position.x, terminal.position.y)
-      this.drawTerminalCap(terminal)
-    }
+    this.drawTerminalState('start', this.layout?.startTerminal ?? null)
+    this.drawTerminalState('end', this.layout?.endTerminal ?? null)
 
     this.stroke({
       color: this.color,
-      width: RouteLayoutCalculator.LINE_WIDTH,
+      width: RouteView.ROUTE_STROKE_WIDTH,
       cap: 'butt',
       join: 'round',
     })
   }
 
-  private drawRoundedPath(points: readonly Point[]): void {
-    const first = points[0]
+  private updateTerminalTransition(
+    key: TerminalKey,
+    previous: TerminalLayout | null,
+    next: TerminalLayout | null
+  ): void {
+    const activeTransition = this.terminalTransitions.get(key)
 
-    if (!first) {
+    if (activeTransition && this.isSameTerminal(activeTransition.next, next)) {
       return
     }
 
-    this.moveTo(first.x, first.y)
-
-    for (let index = 1; index < points.length - 1; index++) {
-      const previous = points[index - 1]
-      const current = points[index]
-      const next = points[index + 1]
-
-      if (!previous || !current || !next) {
-        continue
-      }
-
-      const incomingLength = Math.hypot(
-        current.x - previous.x,
-        current.y - previous.y
-      )
-      const outgoingLength = Math.hypot(next.x - current.x, next.y - current.y)
-      const radius = Math.min(
-        RouteView.CORNER_RADIUS,
-        incomingLength / 2,
-        outgoingLength / 2
-      )
-      const entryPoint = this.moveTowards(current, previous, radius)
-      const exitPoint = this.moveTowards(current, next, radius)
-
-      this.lineTo(entryPoint.x, entryPoint.y)
-      this.quadraticCurveTo(current.x, current.y, exitPoint.x, exitPoint.y)
+    if (this.isSameTerminal(previous, next)) {
+      this.terminalTransitions.delete(key)
+      return
     }
 
-    const last = points.at(-1)
-
-    if (last) {
-      this.lineTo(last.x, last.y)
+    if (!previous && !next) {
+      this.terminalTransitions.delete(key)
+      return
     }
+
+    this.terminalTransitions.set(key, {
+      previous,
+      next,
+      elapsedSeconds: 0,
+    })
   }
 
-  private drawTerminalCap(terminal: TerminalLayout): void {
-    const halfLength = RouteView.TERMINAL_CAP_LENGTH / 2
+  private drawTerminalState(
+    key: TerminalKey,
+    current: TerminalLayout | null
+  ): void {
+    const transition = this.terminalTransitions.get(key)
+
+    if (!transition) {
+      this.drawTerminal(current, 1)
+      return
+    }
+
+    const collapseProgress = this.clampProgress(
+      transition.elapsedSeconds / RouteView.TERMINAL_COLLAPSE_DURATION_SECONDS
+    )
+    const expandProgress = this.clampProgress(
+      (transition.elapsedSeconds -
+        RouteView.TERMINAL_COLLAPSE_DURATION_SECONDS) /
+        RouteView.TERMINAL_EXPAND_DURATION_SECONDS
+    )
+
+    this.drawTerminal(
+      transition.previous,
+      1 - this.easeInOutCubic(collapseProgress)
+    )
+    this.drawTerminal(transition.next, this.easeInOutCubic(expandProgress))
+  }
+
+  private drawTerminal(terminal: TerminalLayout | null, scale: number): void {
+    if (
+      !terminal ||
+      this.hiddenTerminalStationIds.has(terminal.stationId) ||
+      scale <= 0
+    ) {
+      return
+    }
+
+    const stemCenter = {
+      x: (terminal.origin.x + terminal.position.x) / 2,
+      y: (terminal.origin.y + terminal.position.y) / 2,
+    }
+    const halfStem = {
+      x: ((terminal.position.x - terminal.origin.x) / 2) * scale,
+      y: ((terminal.position.y - terminal.origin.y) / 2) * scale,
+    }
+    const animatedCapPosition = {
+      x: stemCenter.x + halfStem.x,
+      y: stemCenter.y + halfStem.y,
+    }
+
+    this.moveTo(stemCenter.x - halfStem.x, stemCenter.y - halfStem.y)
+    this.lineTo(animatedCapPosition.x, animatedCapPosition.y)
+    this.drawTerminalCap(terminal, animatedCapPosition, scale)
+  }
+
+  private drawTerminalCap(
+    terminal: TerminalLayout,
+    position: Point,
+    scale: number
+  ): void {
+    const halfLength = (RouteView.TERMINAL_CAP_LENGTH / 2) * scale
     const normal = {
       x: -terminal.direction.y,
       y: terminal.direction.x,
     }
 
     this.moveTo(
-      terminal.position.x - normal.x * halfLength,
-      terminal.position.y - normal.y * halfLength
+      position.x - normal.x * halfLength,
+      position.y - normal.y * halfLength
     )
     this.lineTo(
-      terminal.position.x + normal.x * halfLength,
-      terminal.position.y + normal.y * halfLength
+      position.x + normal.x * halfLength,
+      position.y + normal.y * halfLength
     )
   }
 
-  private moveTowards(start: Point, target: Point, distance: number): Point {
-    const deltaX = target.x - start.x
-    const deltaY = target.y - start.y
-    const length = Math.hypot(deltaX, deltaY)
+  private readonly updateAnimation = (ticker: Ticker): void => {
+    const totalDuration =
+      RouteView.TERMINAL_COLLAPSE_DURATION_SECONDS +
+      RouteView.TERMINAL_EXPAND_DURATION_SECONDS
 
-    if (length === 0) {
-      return start
+    for (const [key, transition] of this.terminalTransitions) {
+      transition.elapsedSeconds += ticker.deltaMS / 1000
+
+      const duration = transition.next
+        ? totalDuration
+        : RouteView.TERMINAL_COLLAPSE_DURATION_SECONDS
+
+      if (transition.elapsedSeconds >= duration) {
+        this.terminalTransitions.delete(key)
+      }
     }
 
-    return {
-      x: start.x + (deltaX / length) * distance,
-      y: start.y + (deltaY / length) * distance,
+    this.updateAnimationTicker()
+    this.redraw()
+  }
+
+  private updateAnimationTicker(): void {
+    if (this.terminalTransitions.size > 0 && !this.isAnimationTicking) {
+      this.ticker.add(this.updateAnimation)
+      this.isAnimationTicking = true
+    } else if (this.terminalTransitions.size === 0) {
+      this.stopAnimationTicker()
     }
+  }
+
+  private restartRevealedTerminalTransition(
+    key: TerminalKey,
+    terminal: TerminalLayout | null,
+    hiddenStationIds: ReadonlySet<StationId>
+  ): void {
+    const transition = this.terminalTransitions.get(key)
+
+    if (!terminal) {
+      if (
+        transition?.previous &&
+        hiddenStationIds.has(transition.previous.stationId)
+      ) {
+        this.terminalTransitions.delete(key)
+      }
+      return
+    }
+
+    if (!hiddenStationIds.has(terminal.stationId)) {
+      if (
+        transition?.previous &&
+        hiddenStationIds.has(transition.previous.stationId)
+      ) {
+        this.terminalTransitions.delete(key)
+      }
+      return
+    }
+
+    this.terminalTransitions.set(key, {
+      previous: null,
+      next: terminal,
+      elapsedSeconds: RouteView.TERMINAL_COLLAPSE_DURATION_SECONDS,
+    })
+  }
+
+  private stopAnimationTicker(): void {
+    if (!this.isAnimationTicking) {
+      return
+    }
+
+    this.ticker.remove(this.updateAnimation)
+    this.isAnimationTicking = false
+  }
+
+  private isSameTerminal(
+    first: TerminalLayout | null,
+    second: TerminalLayout | null
+  ): boolean {
+    return (
+      first === second ||
+      (first !== null &&
+        second !== null &&
+        first.stationId === second.stationId &&
+        first.port === second.port)
+    )
+  }
+
+  private clampProgress(value: number): number {
+    return Math.max(0, Math.min(1, value))
+  }
+
+  private easeInOutCubic(value: number): number {
+    return value < 0.5
+      ? 4 * value * value * value
+      : 1 - Math.pow(-2 * value + 2, 3) / 2
   }
 }

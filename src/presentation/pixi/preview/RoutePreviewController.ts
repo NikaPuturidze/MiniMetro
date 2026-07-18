@@ -31,8 +31,9 @@ export class RoutePreviewController {
     insertionPoint: Point
   ): void {
     const route = this.state.getRoute(routeId)
-    const startId = route?.getStationIds()[segmentIndex]
-    const endId = route?.getStationIds()[segmentIndex + 1]
+    const segment = route?.getSegmentStationIds(segmentIndex)
+    const startId = segment?.[0]
+    const endId = segment?.[1]
     const start =
       startId === undefined ? undefined : this.state.getStation(startId)
     const end = endId === undefined ? undefined : this.state.getStation(endId)

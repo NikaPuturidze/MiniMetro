@@ -3,11 +3,13 @@ import type { GameDomainEvent } from '@/game/domain/GameEvent'
 import type { GameStateReader } from '@/game/domain/GameState'
 import type {
   CommandResult,
+  CloseRouteInput,
   CreateStationInput,
   ExtendRouteInput,
   GameCommands,
   InsertStationInput,
   RemoveRouteTerminalInput,
+  ReopenRouteInput,
   SetSegmentRoutingInput,
   StartRouteInput,
 } from './GameCommands'
@@ -30,6 +32,14 @@ export class GameSession implements GameCommands {
 
   public extendRoute(input: ExtendRouteInput): CommandResult<void> {
     return this.commands.extendRoute(input)
+  }
+
+  public closeRoute(input: CloseRouteInput): CommandResult<void> {
+    return this.commands.closeRoute(input)
+  }
+
+  public reopenRoute(input: ReopenRouteInput): CommandResult<void> {
+    return this.commands.reopenRoute(input)
   }
 
   public insertStation(input: InsertStationInput): CommandResult<void> {

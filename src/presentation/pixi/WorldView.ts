@@ -1,4 +1,5 @@
 import { Container } from 'pixi.js'
+import type { StationInteractionEffects } from './effects/StationInteractionEffects'
 import type { RouteView } from './views/RouteView'
 import type { RoutePreviewView } from './views/RoutePreviewView'
 import type { StationView } from './views/StationView'
@@ -6,11 +7,17 @@ import type { StationView } from './views/StationView'
 export class WorldView extends Container {
   private readonly routeLayer = new Container()
   private readonly previewLayer = new Container()
+  private readonly interactionEffectsLayer = new Container()
   private readonly stationLayer = new Container()
 
   public constructor() {
     super()
-    this.addChild(this.routeLayer, this.previewLayer, this.stationLayer)
+    this.addChild(
+      this.routeLayer,
+      this.previewLayer,
+      this.interactionEffectsLayer,
+      this.stationLayer
+    )
   }
 
   public addRouteView(view: RouteView): void {
@@ -19,6 +26,10 @@ export class WorldView extends Container {
 
   public addPreviewView(view: RoutePreviewView): void {
     this.previewLayer.addChild(view)
+  }
+
+  public addStationInteractionEffects(view: StationInteractionEffects): void {
+    this.interactionEffectsLayer.addChild(view)
   }
 
   public addStationView(view: StationView): void {

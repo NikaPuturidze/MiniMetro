@@ -9,9 +9,11 @@ import { GameState } from '@/game/domain/GameState'
 import { Route } from '@/game/domain/Route'
 import { RouteRules } from '@/game/domain/RouteRules'
 import { RouteLayoutCalculator } from '@/game/layout/RouteLayoutCalculator'
+import { OctilinearRouteGeometryPolicy } from '@/game/layout/OctilinearRouteGeometryPolicy'
 import { createDevelopmentScenario } from '@/game/setup/createDevelopmentScenario'
 import { PixiGameClock } from '@/presentation/pixi/PixiGameClock'
 import { WorldView } from '@/presentation/pixi/WorldView'
+import { StationInteractionEffects } from '@/presentation/pixi/effects/StationInteractionEffects'
 import { RouteViewEventHandler } from '@/presentation/pixi/event-handlers/RouteViewEventHandler'
 import { StationViewEventHandler } from '@/presentation/pixi/event-handlers/StationViewEventHandler'
 import { WorldInputController } from '@/presentation/pixi/input/WorldInputController'
@@ -33,6 +35,9 @@ export class GameCompositionRoot {
       RouteColor.Red,
       RouteColor.Blue,
       RouteColor.Green,
+      RouteColor.Orange,
+      RouteColor.Purple,
+      RouteColor.Brown,
     ] as const
 
     routeColors.forEach((color, index) => {
@@ -40,18 +45,20 @@ export class GameCompositionRoot {
     })
 
     const events = new InMemoryEventDispatcher<GameDomainEvent>()
-    const routeEditing = new RouteEditingService(
-      state,
-      new RouteRules(),
-      events
-    )
+    const routeRules = new RouteRules(new OctilinearRouteGeometryPolicy())
+    const routeEditing = new RouteEditingService(state, routeRules, events)
     const session = new GameSession(state, events, routeEditing)
     const world = new WorldView()
     const stationViews = new StationViewRegistry(world, state)
-    const routeViews = new RouteViewRegistry(world, state)
+    const routeViews = new RouteViewRegistry(world, state, app.ticker)
     const previewView = new RoutePreviewView()
+    const stationInteractionEffects = new StationInteractionEffects(
+      state,
+      app.ticker
+    )
 
     world.addPreviewView(previewView)
+    world.addStationInteractionEffects(stationInteractionEffects)
 
     const stationViewEvents = new StationViewEventHandler(events, stationViews)
     const routeViewEvents = new RouteViewEventHandler(
@@ -65,8 +72,10 @@ export class GameCompositionRoot {
     const interaction = new RouteInteractionController(
       state,
       session,
+      routeRules,
       routeViews,
-      preview
+      preview,
+      stationInteractionEffects
     )
     const input = new WorldInputController(
       app.stage,

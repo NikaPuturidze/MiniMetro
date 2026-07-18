@@ -29,6 +29,12 @@ interface RoutePorts {
   readonly end: number | null
 }
 
+interface TerminalUsage {
+  readonly route: Route
+  readonly incidentPort: number
+  readonly previousPort: number | null
+}
+
 export class RouteLayoutCalculator {
   public static readonly LINE_WIDTH = 10
   public static readonly TERMINAL_EXTENSION = 48
@@ -64,12 +70,12 @@ export class RouteLayoutCalculator {
     const offsetsByRoute = this.calculateLaneOffsets(
       activeRoutes,
       centerSegmentsByRoute,
-      routeOrder,
-      changedRouteId
+      routeOrder
     )
     const portsByRoute = this.calculateTerminalPorts(
       activeRoutes,
-      centerSegmentsByRoute
+      centerSegmentsByRoute,
+      changedRouteId
     )
     const layouts = new Map<RouteId, RouteLayout>()
 
@@ -119,10 +125,14 @@ export class RouteLayoutCalculator {
     route: Route,
     state: GameStateReader
   ): readonly (readonly Point[])[] {
-    const stations = route
+    const routeStations = route
       .getStationIds()
       .map((stationId) => state.getStation(stationId))
       .filter((station) => station !== undefined)
+    const stations =
+      route.isCircular && routeStations[0]
+        ? [...routeStations, routeStations[0]]
+        : routeStations
 
     return OctilinearRouter.routeSegments(
       stations,
@@ -135,8 +145,7 @@ export class RouteLayoutCalculator {
   private calculateLaneOffsets(
     activeRoutes: readonly Route[],
     centerSegmentsByRoute: ReadonlyMap<RouteId, readonly (readonly Point[])[]>,
-    routeOrder: ReadonlyMap<RouteId, number>,
-    changedRouteId?: RouteId
+    routeOrder: ReadonlyMap<RouteId, number>
   ): Map<RouteId, number[][]> {
     const offsetsByRoute = new Map<RouteId, number[][]>()
     const prioritiesByRoute = new Map<RouteId, number[][]>()
@@ -144,15 +153,11 @@ export class RouteLayoutCalculator {
 
     for (const route of activeRoutes) {
       const centerSegments = centerSegmentsByRoute.get(route.id) ?? []
-      const previousRouteOffsets = this.previousOffsets.get(route.id) ?? []
-      const isChanged = route.id === changedRouteId
       const offsets = centerSegments.map((points, segmentIndex) =>
         points.slice(1).map((_, spanIndex) => {
-          if (isChanged) {
-            return 0
-          }
-
-          return previousRouteOffsets[segmentIndex]?.[spanIndex] ?? 0
+          return (
+            this.previousOffsets.get(route.id)?.[segmentIndex]?.[spanIndex] ?? 0
+          )
         })
       )
       const priorities = offsets.map((segment) =>
@@ -167,25 +172,14 @@ export class RouteLayoutCalculator {
       })
     }
 
-    const mutableRouteIds =
-      changedRouteId === undefined
-        ? new Set(activeRoutes.map((route) => route.id))
-        : new Set([changedRouteId])
     const groups = this.createTrackOverlapGroups(trackSpans)
 
-    this.applyLaneOffsets(
-      groups,
-      offsetsByRoute,
-      prioritiesByRoute,
-      routeOrder,
-      mutableRouteIds,
-      activeRoutes.length
-    )
+    this.applyLaneOffsets(groups, offsetsByRoute, prioritiesByRoute, routeOrder)
     this.preserveLaneContinuityAtStations(
       activeRoutes,
       offsetsByRoute,
       prioritiesByRoute,
-      mutableRouteIds
+      new Set(activeRoutes.map((route) => route.id))
     )
 
     return offsetsByRoute
@@ -447,48 +441,29 @@ export class RouteLayoutCalculator {
     groups: readonly CorridorUsage[][],
     offsetsByRoute: ReadonlyMap<RouteId, number[][]>,
     prioritiesByRoute: ReadonlyMap<RouteId, number[][]>,
-    routeOrder: ReadonlyMap<RouteId, number>,
-    mutableRouteIds: ReadonlySet<RouteId>,
-    routeCount: number
+    routeOrder: ReadonlyMap<RouteId, number>
   ): void {
     const orderedGroups = [...groups].sort(
       (first, second) => second.length - first.length
     )
 
     for (const sourceUsages of orderedGroups) {
-      const usages = [...sourceUsages].sort(
-        (first, second) =>
+      const usages = [...sourceUsages].sort((first, second) => {
+        const previousOffsetDifference =
+          this.getCanonicalOffset(first, offsetsByRoute) -
+          this.getCanonicalOffset(second, offsetsByRoute)
+
+        return (
+          previousOffsetDifference ||
           (routeOrder.get(first.routeId) ?? 0) -
-          (routeOrder.get(second.routeId) ?? 0)
-      )
-      const usedLaneIndices = new Set<number>()
-
-      for (const usage of usages) {
-        if (mutableRouteIds.has(usage.routeId)) {
-          continue
-        }
-
-        const routeOffset =
-          offsetsByRoute.get(usage.routeId)?.[usage.segmentIndex]?.[
-            usage.spanIndex
-          ] ?? 0
-        const canonicalOffset = usage.forward ? routeOffset : -routeOffset
-
-        usedLaneIndices.add(
-          Math.round(canonicalOffset / RouteLayoutCalculator.LANE_SPACING)
+            (routeOrder.get(second.routeId) ?? 0)
         )
-      }
+      })
 
-      for (const usage of usages) {
-        if (!mutableRouteIds.has(usage.routeId)) {
-          continue
-        }
-
-        const laneIndex = this.findAvailableLaneIndex(
-          usedLaneIndices,
-          routeCount
-        )
-        const canonicalOffset = laneIndex * RouteLayoutCalculator.LANE_SPACING
+      usages.forEach((usage, lanePosition) => {
+        const centeredLaneIndex = lanePosition - (usages.length - 1) / 2
+        const canonicalOffset =
+          centeredLaneIndex * RouteLayoutCalculator.LANE_SPACING
         const routeOffset = usage.forward ? canonicalOffset : -canonicalOffset
         const offsets = offsetsByRoute.get(usage.routeId)
         const priorities = prioritiesByRoute.get(usage.routeId)
@@ -496,47 +471,38 @@ export class RouteLayoutCalculator {
           priorities?.[usage.segmentIndex]?.[usage.spanIndex] ?? 0
 
         if (!offsets || !priorities || usages.length <= currentPriority) {
-          continue
+          return
         }
 
         const segmentOffsets = offsets[usage.segmentIndex]
         const segmentPriorities = priorities[usage.segmentIndex]
 
         if (!segmentOffsets || !segmentPriorities) {
-          continue
+          return
         }
 
         segmentOffsets[usage.spanIndex] = routeOffset
         segmentPriorities[usage.spanIndex] = usages.length
-        usedLaneIndices.add(laneIndex)
-      }
+      })
     }
   }
 
-  private findAvailableLaneIndex(
-    usedLaneIndices: ReadonlySet<number>,
-    routeCount: number
+  private getCanonicalOffset(
+    usage: CorridorUsage,
+    offsetsByRoute: ReadonlyMap<RouteId, number[][]>
   ): number {
-    if (!usedLaneIndices.has(0)) {
-      return 0
-    }
+    const routeOffset =
+      offsetsByRoute.get(usage.routeId)?.[usage.segmentIndex]?.[
+        usage.spanIndex
+      ] ?? 0
 
-    for (let distance = 1; distance <= routeCount; distance++) {
-      if (!usedLaneIndices.has(distance)) {
-        return distance
-      }
-
-      if (!usedLaneIndices.has(-distance)) {
-        return -distance
-      }
-    }
-
-    throw new Error('No route lane is available.')
+    return usage.forward ? routeOffset : -routeOffset
   }
 
   private calculateTerminalPorts(
     activeRoutes: readonly Route[],
-    centerSegmentsByRoute: ReadonlyMap<RouteId, readonly (readonly Point[])[]>
+    centerSegmentsByRoute: ReadonlyMap<RouteId, readonly (readonly Point[])[]>,
+    changedRouteId?: RouteId
   ): Map<RouteId, RoutePorts> {
     const portsByRoute = new Map<RouteId, RoutePorts>()
     const stationIds = new Set<StationId>()
@@ -554,11 +520,32 @@ export class RouteLayoutCalculator {
         (route) => route.stationCount >= 2 && route.isInternalStation(stationId)
       )
       const terminalRoutes = activeRoutes.filter(
-        (route) => route.stationCount >= 2 && route.isTerminalAt(stationId)
+        (route) =>
+          route.stationCount >= 2 &&
+          (route.isTerminalAt(stationId) ||
+            route.getCircularClosureStationId() === stationId)
       )
       const usedPorts = new Set<number>()
+      const incidentPortCounts = new Map<number, number>()
+      const terminalUsages: TerminalUsage[] = []
+      const incidentRoutes = new Set([...internalRoutes, ...terminalRoutes])
 
-      for (const route of internalRoutes) {
+      for (const route of incidentRoutes) {
+        for (const port of this.getIncidentPorts(
+          route,
+          stationId,
+          centerSegmentsByRoute
+        )) {
+          const normalizedPort = this.normalizePort(port)
+
+          incidentPortCounts.set(
+            normalizedPort,
+            (incidentPortCounts.get(normalizedPort) ?? 0) + 1
+          )
+        }
+      }
+
+      for (const route of incidentRoutes) {
         for (const port of this.getIncidentPorts(
           route,
           stationId,
@@ -569,36 +556,96 @@ export class RouteLayoutCalculator {
       }
 
       for (const route of terminalRoutes) {
-        const incidentPort = this.getIncidentPorts(
+        const incidentPort = this.getTerminalIncidentPort(
           route,
           stationId,
           centerSegmentsByRoute
-        )[0]
+        )
 
         if (incidentPort === undefined) {
           throw new Error('Route terminal requires an incident port.')
         }
 
+        terminalUsages.push({
+          route,
+          incidentPort,
+          previousPort: this.getStablePreviousTerminalPort(
+            route.id,
+            stationId,
+            incidentPort
+          ),
+        })
+      }
+
+      const assignedRouteIds = new Set<RouteId>()
+      const changedUsage = terminalUsages.find(
+        (usage) =>
+          usage.route.id === changedRouteId && usage.previousPort === null
+      )
+
+      if (changedUsage) {
         const availablePort =
-          this.getTerminalPortPriority(incidentPort).find(
-            (port) => !usedPorts.has(port)
-          ) ?? null
+          this.getTerminalPortPriority(
+            changedUsage.incidentPort,
+            incidentPortCounts
+          ).find((port) => !usedPorts.has(port)) ?? null
 
         if (availablePort === null) {
           throw new Error('No terminal port is available.')
         }
 
-        const current = portsByRoute.get(route.id) ?? {
-          start: null,
-          end: null,
-        }
-        const next =
-          route.getFirstStationId() === stationId
-            ? { start: availablePort, end: current.end }
-            : { start: current.start, end: availablePort }
-
+        this.assignTerminalPort(
+          changedUsage.route,
+          stationId,
+          availablePort,
+          portsByRoute
+        )
         usedPorts.add(availablePort)
-        portsByRoute.set(route.id, next)
+        assignedRouteIds.add(changedUsage.route.id)
+      }
+
+      for (const usage of terminalUsages) {
+        if (
+          assignedRouteIds.has(usage.route.id) ||
+          usage.previousPort === null ||
+          usedPorts.has(usage.previousPort)
+        ) {
+          continue
+        }
+
+        this.assignTerminalPort(
+          usage.route,
+          stationId,
+          usage.previousPort,
+          portsByRoute
+        )
+        usedPorts.add(usage.previousPort)
+        assignedRouteIds.add(usage.route.id)
+      }
+
+      for (const usage of terminalUsages) {
+        if (assignedRouteIds.has(usage.route.id)) {
+          continue
+        }
+
+        const availablePort =
+          this.getTerminalPortPriority(
+            usage.incidentPort,
+            incidentPortCounts
+          ).find((port) => !usedPorts.has(port)) ?? null
+
+        if (availablePort === null) {
+          throw new Error('No terminal port is available.')
+        }
+
+        this.assignTerminalPort(
+          usage.route,
+          stationId,
+          availablePort,
+          portsByRoute
+        )
+        usedPorts.add(availablePort)
+        assignedRouteIds.add(usage.route.id)
       }
     }
 
@@ -622,6 +669,104 @@ export class RouteLayoutCalculator {
     return portsByRoute
   }
 
+  private assignTerminalPort(
+    route: Route,
+    stationId: StationId,
+    port: number,
+    portsByRoute: Map<RouteId, RoutePorts>
+  ): void {
+    const current = portsByRoute.get(route.id) ?? {
+      start: null,
+      end: null,
+    }
+    const next = route.isCircular
+      ? { start: current.start, end: port }
+      : route.getFirstStationId() === stationId
+        ? { start: port, end: current.end }
+        : { start: current.start, end: port }
+
+    portsByRoute.set(route.id, next)
+  }
+
+  private getStablePreviousTerminalPort(
+    routeId: RouteId,
+    stationId: StationId,
+    incidentPort: number
+  ): number | null {
+    const previousLayout = this.previousLayouts.get(routeId)
+
+    if (!previousLayout) {
+      return null
+    }
+
+    const previousTerminal =
+      previousLayout.startTerminal?.stationId === stationId
+        ? previousLayout.startTerminal
+        : previousLayout.endTerminal?.stationId === stationId
+          ? previousLayout.endTerminal
+          : null
+    const previousIncidentPort = this.getLayoutTerminalIncidentPort(
+      previousLayout,
+      stationId
+    )
+
+    return previousTerminal &&
+      previousIncidentPort !== null &&
+      this.normalizePort(previousIncidentPort) ===
+        this.normalizePort(incidentPort)
+      ? previousTerminal.port
+      : null
+  }
+
+  private getLayoutTerminalIncidentPort(
+    layout: RouteLayout,
+    stationId: StationId
+  ): number | null {
+    if (layout.startTerminal?.stationId === stationId) {
+      const points = layout.segments[0]?.centerPoints
+      const stationPoint = points?.[0]
+      const nextPoint = points?.[1]
+
+      return stationPoint && nextPoint
+        ? OctilinearPort.fromVector({
+            x: nextPoint.x - stationPoint.x,
+            y: nextPoint.y - stationPoint.y,
+          })
+        : null
+    }
+
+    if (layout.endTerminal?.stationId === stationId) {
+      const points = layout.segments.at(-1)?.centerPoints
+      const firstPoint = points?.[0]
+      const nextPoint = points?.[1]
+      const stationPoint = points?.at(-1)
+      const previousPoint = points?.at(-2)
+      const terminalOrigin = layout.endTerminal.origin
+
+      if (
+        firstPoint &&
+        nextPoint &&
+        this.pointsMatch(firstPoint, terminalOrigin)
+      ) {
+        return OctilinearPort.fromVector({
+          x: nextPoint.x - firstPoint.x,
+          y: nextPoint.y - firstPoint.y,
+        })
+      }
+
+      return stationPoint &&
+        previousPoint &&
+        this.pointsMatch(stationPoint, terminalOrigin)
+        ? OctilinearPort.fromVector({
+            x: previousPoint.x - stationPoint.x,
+            y: previousPoint.y - stationPoint.y,
+          })
+        : null
+    }
+
+    return null
+  }
+
   private getIncidentPorts(
     route: Route,
     stationId: StationId,
@@ -635,9 +780,21 @@ export class RouteLayoutCalculator {
 
     const segments = centerSegmentsByRoute.get(route.id) ?? []
     const ports: number[] = []
+    const previousSegmentIndex =
+      stationIndex > 0
+        ? stationIndex - 1
+        : route.isCircular
+          ? route.segmentCount - 1
+          : null
+    const nextSegmentIndex =
+      stationIndex < route.stationCount - 1
+        ? stationIndex
+        : route.isCircular
+          ? route.segmentCount - 1
+          : null
 
-    if (stationIndex > 0) {
-      const previousSegment = segments[stationIndex - 1]
+    if (previousSegmentIndex !== null) {
+      const previousSegment = segments[previousSegmentIndex]
       const stationPoint = previousSegment?.at(-1)
       const previousPoint = previousSegment?.at(-2)
 
@@ -651,8 +808,8 @@ export class RouteLayoutCalculator {
       }
     }
 
-    if (stationIndex < route.stationCount - 1) {
-      const nextSegment = segments[stationIndex]
+    if (nextSegmentIndex !== null) {
+      const nextSegment = segments[nextSegmentIndex]
       const stationPoint = nextSegment?.[0]
       const nextPoint = nextSegment?.[1]
 
@@ -669,37 +826,60 @@ export class RouteLayoutCalculator {
     return ports
   }
 
-  private getTerminalPortPriority(incidentPort: number): readonly number[] {
-    const incomingPorts = new Set([
-      this.normalizePort(incidentPort - 1),
-      this.normalizePort(incidentPort),
-      this.normalizePort(incidentPort + 1),
-    ])
+  private getTerminalIncidentPort(
+    route: Route,
+    stationId: StationId,
+    centerSegmentsByRoute: ReadonlyMap<RouteId, readonly (readonly Point[])[]>
+  ): number | undefined {
+    const incidentPorts = this.getIncidentPorts(
+      route,
+      stationId,
+      centerSegmentsByRoute
+    )
+
+    if (!route.isCircular) {
+      return incidentPorts[0]
+    }
+
+    return route.getCircularClosureSourceTerminal() === 'start'
+      ? incidentPorts.at(-1)
+      : incidentPorts[0]
+  }
+
+  private getTerminalPortPriority(
+    incidentPort: number,
+    incidentPortCounts: ReadonlyMap<number, number>
+  ): readonly number[] {
+    const incomingPort = this.normalizePort(incidentPort)
     const oppositePort = this.normalizePort(incidentPort + 4)
     const availablePorts =
       RouteLayoutCalculator.TERMINAL_PORT_TIE_BREAK_PRIORITY.filter(
-        (port) => !incomingPorts.has(port)
+        (port) => port !== incomingPort
       )
-    const nearestCardinalDistance = Math.min(
-      ...availablePorts
-        .filter((port) => port % 2 === 0)
-        .map((port) => this.getPortDistance(port, oppositePort))
-    )
 
     return availablePorts.sort((firstPort, secondPort) => {
-      const getPriority = (port: number): number => {
-        if (port % 2 !== 0) {
-          return 2
-        }
+      const loadDifference =
+        this.getLocalPortLoad(firstPort, incidentPortCounts) -
+        this.getLocalPortLoad(secondPort, incidentPortCounts)
+      const distanceDifference =
+        this.getPortDistance(firstPort, oppositePort) -
+        this.getPortDistance(secondPort, oppositePort)
+      const cardinalDifference = (firstPort % 2) - (secondPort % 2)
 
-        return this.getPortDistance(port, oppositePort) ===
-          nearestCardinalDistance
-          ? 1
-          : 3
-      }
-
-      return getPriority(firstPort) - getPriority(secondPort)
+      return loadDifference || distanceDifference || cardinalDifference
     })
+  }
+
+  private getLocalPortLoad(
+    port: number,
+    incidentPortCounts: ReadonlyMap<number, number>
+  ): number {
+    const exactLoad = incidentPortCounts.get(this.normalizePort(port)) ?? 0
+    const previousLoad =
+      incidentPortCounts.get(this.normalizePort(port - 1)) ?? 0
+    const nextLoad = incidentPortCounts.get(this.normalizePort(port + 1)) ?? 0
+
+    return exactLoad * 2 + previousLoad + nextLoad
   }
 
   private createRouteLayout(
@@ -710,12 +890,18 @@ export class RouteLayoutCalculator {
   ): RouteLayout {
     const firstStationId = route.getFirstStationId()
     const lastStationId = route.getLastStationId()
+    const closureStationId = route.getCircularClosureStationId()
+    const circularClosureTerminal =
+      !route.isCircular || closureStationId === null || ports.end === null
+        ? null
+        : this.createTerminal(closureStationId, ports.end, state)
     const startTerminal =
-      firstStationId === null || ports.start === null
+      route.isCircular || firstStationId === null || ports.start === null
         ? null
         : this.createTerminal(firstStationId, ports.start, state)
-    const endTerminal =
-      route.stationCount < 2 || lastStationId === null || ports.end === null
+    const endTerminal = route.isCircular
+      ? circularClosureTerminal
+      : route.stationCount < 2 || lastStationId === null || ports.end === null
         ? null
         : this.createTerminal(lastStationId, ports.end, state)
 
@@ -755,6 +941,10 @@ export class RouteLayoutCalculator {
 
   private getTrackCoordinateKey(coordinate: number): number {
     return Math.round(coordinate * 1000)
+  }
+
+  private pointsMatch(first: Point, second: Point): boolean {
+    return Math.hypot(first.x - second.x, first.y - second.y) < 0.001
   }
 
   private getPortDistance(firstPort: number, secondPort: number): number {

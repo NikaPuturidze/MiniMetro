@@ -1,3 +1,4 @@
+import type { Ticker } from 'pixi.js'
 import type { GameStateReader } from '@/game/domain/GameState'
 import type { RouteId } from '@/game/domain/Ids'
 import type { RouteLayout } from '@/game/layout/RouteLayout'
@@ -9,10 +10,11 @@ export class RouteViewRegistry {
 
   public constructor(
     private readonly world: WorldView,
-    state: GameStateReader
+    state: GameStateReader,
+    ticker: Ticker
   ) {
     for (const route of state.getRoutes()) {
-      const view = new RouteView(route.id, route.color)
+      const view = new RouteView(route.id, route.color, ticker)
 
       this.views.set(route.id, view)
       this.world.addRouteView(view)

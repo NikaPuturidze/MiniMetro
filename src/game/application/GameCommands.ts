@@ -27,6 +27,15 @@ export interface ExtendRouteInput {
   readonly terminal: RouteTerminal
 }
 
+export interface CloseRouteInput {
+  readonly routeId: RouteId
+  readonly terminal: RouteTerminal
+}
+
+export interface ReopenRouteInput {
+  readonly routeId: RouteId
+}
+
 export interface InsertStationInput {
   readonly routeId: RouteId
   readonly stationId: StationId
@@ -48,6 +57,8 @@ export interface GameCommands {
   createStation(input: CreateStationInput): CommandResult<StationId>
   startRoute(input: StartRouteInput): CommandResult<RouteId>
   extendRoute(input: ExtendRouteInput): CommandResult<void>
+  closeRoute(input: CloseRouteInput): CommandResult<void>
+  reopenRoute(input: ReopenRouteInput): CommandResult<void>
   insertStation(input: InsertStationInput): CommandResult<void>
   removeRouteTerminal(input: RemoveRouteTerminalInput): CommandResult<void>
   setSegmentRouting(input: SetSegmentRoutingInput): CommandResult<void>

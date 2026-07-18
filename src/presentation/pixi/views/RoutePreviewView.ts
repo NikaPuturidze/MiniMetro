@@ -1,6 +1,7 @@
 import { Graphics } from 'pixi.js'
 import type { Point } from '@/engine/geometry/Point'
 import { RouteLayoutCalculator } from '@/game/layout/RouteLayoutCalculator'
+import { drawRoundedRoutePath } from '../RoundedRoutePath'
 
 export class RoutePreviewView extends Graphics {
   private static readonly PREVIEW_ALPHA = 0.65
@@ -19,11 +20,7 @@ export class RoutePreviewView extends Graphics {
       return
     }
 
-    this.moveTo(first.x, first.y)
-
-    for (const point of points.slice(1)) {
-      this.lineTo(point.x, point.y)
-    }
+    drawRoundedRoutePath(this, points)
 
     if (showTerminalCap) {
       const beforeLast = points.at(-2)

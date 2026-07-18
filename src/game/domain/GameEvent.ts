@@ -6,6 +6,8 @@ export const GameEventType = {
   StationCreated: 'station-created',
   RouteCreated: 'route-created',
   RouteConnectedToStation: 'route-connected-to-station',
+  RouteClosed: 'route-closed',
+  RouteReopened: 'route-reopened',
   RouteTerminalRemoved: 'route-terminal-removed',
   StationInsertedIntoRoute: 'station-inserted-into-route',
   SegmentRoutingChanged: 'segment-routing-changed',
@@ -31,6 +33,16 @@ export interface RouteConnectedToStationEvent {
   readonly routeId: RouteId
   readonly stationId: StationId
   readonly terminal: RouteTerminal
+}
+
+export interface RouteClosedEvent {
+  readonly type: typeof GameEventType.RouteClosed
+  readonly routeId: RouteId
+}
+
+export interface RouteReopenedEvent {
+  readonly type: typeof GameEventType.RouteReopened
+  readonly routeId: RouteId
 }
 
 export interface RouteTerminalRemovedEvent {
@@ -68,6 +80,8 @@ export type GameDomainEvent =
   | StationCreatedEvent
   | RouteCreatedEvent
   | RouteConnectedToStationEvent
+  | RouteClosedEvent
+  | RouteReopenedEvent
   | RouteTerminalRemovedEvent
   | StationInsertedIntoRouteEvent
   | SegmentRoutingChangedEvent

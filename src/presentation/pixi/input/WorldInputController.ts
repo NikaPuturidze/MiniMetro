@@ -13,19 +13,25 @@ export class WorldInputController {
     this.stage.on('pointerdown', this.handlePointerDown)
     this.stage.on('globalpointermove', this.handlePointerMove)
     this.stage.on('pointerup', this.handlePointerUp)
-    this.stage.on('pointerupoutside', this.handlePointerCancel)
+    this.stage.on('pointerupoutside', this.handlePointerUpOutside)
     this.stage.on('pointercancel', this.handlePointerCancel)
     window.addEventListener('keydown', this.handleKeyDown)
+    window.addEventListener('blur', this.handleWindowBlur)
+    window.addEventListener('pointerup', this.handleWindowPointerUp)
+    window.addEventListener('pointercancel', this.handleWindowPointerCancel)
   }
 
   public dispose(): void {
-    this.interaction.cancel()
+    this.interaction.cancel(true)
     this.stage.off('pointerdown', this.handlePointerDown)
     this.stage.off('globalpointermove', this.handlePointerMove)
     this.stage.off('pointerup', this.handlePointerUp)
-    this.stage.off('pointerupoutside', this.handlePointerCancel)
+    this.stage.off('pointerupoutside', this.handlePointerUpOutside)
     this.stage.off('pointercancel', this.handlePointerCancel)
     window.removeEventListener('keydown', this.handleKeyDown)
+    window.removeEventListener('blur', this.handleWindowBlur)
+    window.removeEventListener('pointerup', this.handleWindowPointerUp)
+    window.removeEventListener('pointercancel', this.handleWindowPointerCancel)
   }
 
   private readonly handlePointerDown = (event: FederatedPointerEvent): void => {
@@ -52,6 +58,10 @@ export class WorldInputController {
   }
 
   private readonly handlePointerCancel = (): void => {
+    this.interaction.cancel(true)
+  }
+
+  private readonly handlePointerUpOutside = (): void => {
     this.interaction.cancel()
   }
 
@@ -59,5 +69,17 @@ export class WorldInputController {
     if (event.key === 'Escape') {
       this.interaction.cancel()
     }
+  }
+
+  private readonly handleWindowBlur = (): void => {
+    this.interaction.cancel(true)
+  }
+
+  private readonly handleWindowPointerUp = (): void => {
+    this.interaction.cancel()
+  }
+
+  private readonly handleWindowPointerCancel = (): void => {
+    this.interaction.cancel(true)
   }
 }
